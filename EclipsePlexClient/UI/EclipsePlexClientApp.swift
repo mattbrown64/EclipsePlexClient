@@ -11,7 +11,7 @@ import SwiftUI
 struct EclipsePlexClientApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootShellView()
         }
     }
 }
