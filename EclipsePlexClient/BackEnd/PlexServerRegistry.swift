@@ -38,7 +38,7 @@ final class PlexServerRegistry: ObservableObject {
     }
 
     var allServers: [PlexServer] {
-        PlexSampleData.servers + customServers
+        customServers
     }
 
     func isUserAddedServer(id: UUID) -> Bool {

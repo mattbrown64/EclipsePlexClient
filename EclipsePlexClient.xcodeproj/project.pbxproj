@@ -24,9 +24,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		2A6F3CE2C27BA4E46F8339DF /* Pods-EclipsePlexClient.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-EclipsePlexClient.debug.xcconfig"; path = "Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient.debug.xcconfig"; sourceTree = "<group>"; };
+		5ED0032725CCC2F2B910A780 /* Pods-EclipsePlexClient.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-EclipsePlexClient.release.xcconfig"; path = "Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient.release.xcconfig"; sourceTree = "<group>"; };
 		C57A05612FB8016000237EB8 /* EclipsePlexClient.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EclipsePlexClient.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C57A056E2FB8016100237EB8 /* EclipsePlexClientTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EclipsePlexClientTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C57A05782FB8016100237EB8 /* EclipsePlexClientUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EclipsePlexClientUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E79A161E36BAB428C0F34152 /* Pods_EclipsePlexClient.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_EclipsePlexClient.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -72,6 +75,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		04E2AA61345EF97F99C56CA3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				E79A161E36BAB428C0F34152 /* Pods_EclipsePlexClient.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		41BAE15F2161B6F9B7B1267D /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				2A6F3CE2C27BA4E46F8339DF /* Pods-EclipsePlexClient.debug.xcconfig */,
+				5ED0032725CCC2F2B910A780 /* Pods-EclipsePlexClient.release.xcconfig */,
+			);
+			path = Pods;
+			sourceTree = "<group>";
+		};
 		C57A05582FB8016000237EB8 = {
 			isa = PBXGroup;
 			children = (
@@ -79,6 +99,8 @@
 				C57A05712FB8016100237EB8 /* EclipsePlexClientTests */,
 				C57A057B2FB8016100237EB8 /* EclipsePlexClientUITests */,
 				C57A05622FB8016000237EB8 /* Products */,
+				41BAE15F2161B6F9B7B1267D /* Pods */,
+				04E2AA61345EF97F99C56CA3 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -99,9 +121,12 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = C57A05822FB8016100237EB8 /* Build configuration list for PBXNativeTarget "EclipsePlexClient" */;
 			buildPhases = (
+				FD59EAD703FF2371B20DBE05 /* [CP] Check Pods Manifest.lock */,
 				C57A055D2FB8016000237EB8 /* Sources */,
 				C57A055E2FB8016000237EB8 /* Frameworks */,
 				C57A055F2FB8016000237EB8 /* Resources */,
+				C57A0C7A2FBBEC1100237EB8 /* Embed VLCKit (macOS) */,
+				A84B873FB50F787515B366BF /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -134,8 +159,6 @@
 				C57A05712FB8016100237EB8 /* EclipsePlexClientTests */,
 			);
 			name = EclipsePlexClientTests;
-			packageProductDependencies = (
-			);
 			productName = EclipsePlexClientTests;
 			productReference = C57A056E2FB8016100237EB8 /* EclipsePlexClientTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -157,8 +180,6 @@
 				C57A057B2FB8016100237EB8 /* EclipsePlexClientUITests */,
 			);
 			name = EclipsePlexClientUITests;
-			packageProductDependencies = (
-			);
 			productName = EclipsePlexClientUITests;
 			productReference = C57A05782FB8016100237EB8 /* EclipsePlexClientUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -195,6 +216,8 @@
 			);
 			mainGroup = C57A05582FB8016000237EB8;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C57A05622FB8016000237EB8 /* Products */;
 			projectDirPath = "";
@@ -230,6 +253,67 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A84B873FB50F787515B366BF /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			inputPaths = (
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [[ \"${PLATFORM_NAME}\" != \"iphoneos\" && \"${PLATFORM_NAME}\" != \"iphonesimulator\" ]]; then exit 0; fi\n\"${PODS_ROOT}/Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		C57A0C7A2FBBEC1100237EB8 /* Embed VLCKit (macOS) */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Embed VLCKit (macOS)";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/Scripts/embed-vlckit-macos.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		FD59EAD703FF2371B20DBE05 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-EclipsePlexClient-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [[ \"${PLATFORM_NAME}\" != \"iphoneos\" && \"${PLATFORM_NAME}\" != \"iphonesimulator\" ]]; then exit 0; fi\ndiff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		C57A055D2FB8016000237EB8 /* Sources */ = {
@@ -387,6 +471,7 @@
 		};
 		C57A05832FB8016100237EB8 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 2A6F3CE2C27BA4E46F8339DF /* Pods-EclipsePlexClient.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -397,7 +482,12 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				"FRAMEWORK_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks/VLCKit.xcframework/macos-arm64_x86_64",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Support/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -411,10 +501,21 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
-				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.3;
 				MARKETING_VERSION = 1.0;
+				"OTHER_LDFLAGS[sdk=macosx*]" = (
+					"$(inherited)",
+					"-framework",
+					VLCKit,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = mattbrown64.EclipsePlexClient;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -433,6 +534,7 @@
 		};
 		C57A05842FB8016100237EB8 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5ED0032725CCC2F2B910A780 /* Pods-EclipsePlexClient.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -443,7 +545,12 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				"FRAMEWORK_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Frameworks/VLCKit.xcframework/macos-arm64_x86_64",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Support/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -457,10 +564,21 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
-				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.3;
 				MARKETING_VERSION = 1.0;
+				"OTHER_LDFLAGS[sdk=macosx*]" = (
+					"$(inherited)",
+					"-framework",
+					VLCKit,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = mattbrown64.EclipsePlexClient;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

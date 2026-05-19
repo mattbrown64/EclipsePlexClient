@@ -1,0 +1,4 @@
+VLCUI — MIT License
+https://github.com/LePips/VLCUI
+
+Vendored at 0.8.1 for use with CocoaPods VLCKit binaries.

@@ -1,0 +1,13 @@
+# CocoaPods (MobileVLCKit for iOS)
+Pods/
+*.xcworkspace/xcuserdata/
+
+# Optional: omit large macOS binary (run Scripts/fetch-vlckit-macos.sh)
+# Frameworks/VLCKit.xcframework/
+
+# Xcode user data
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
