@@ -6,12 +6,16 @@ import VLCKit
 /// Minimal macOS VLC bridge — `VLCVideoView` with an explicit frame; defers only audio setup to first tick.
 struct MacVLCPlayerView: NSViewRepresentable {
     let url: URL
+    let streamKind: PlaybackStreamKind
+    let httpHeaderFields: [String: String]
     @ObservedObject var controller: MacVLCPlaybackController
     @Binding var statusText: String
     @Binding var errorMessage: String?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
+            streamKind: streamKind,
+            httpHeaderFields: httpHeaderFields,
             controller: controller,
             statusText: $statusText,
             errorMessage: $errorMessage
@@ -23,24 +27,17 @@ struct MacVLCPlayerView: NSViewRepresentable {
         view.autoresizingMask = [.width, .height]
         view.backColor = .black
         view.wantsLayer = true
-        context.coordinator.start(in: view, url: url)
+        context.coordinator.scheduleStart(in: view, url: url)
         return view
     }
 
     func updateNSView(_ nsView: VLCVideoView, context: Context) {
-        context.coordinator.restartIfNeeded(in: nsView, url: url)
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: VLCVideoView, context: Context) -> CGSize? {
-        let width = proposal.width ?? 960
-        let height = proposal.height ?? 540
-        return CGSize(
-            width: max(width, 320),
-            height: max(height, 180)
-        )
+        context.coordinator.scheduleStart(in: nsView, url: url)
     }
 
     final class Coordinator: NSObject, VLCMediaPlayerDelegate, VLCLibraryLogReceiverProtocol {
+        private let streamKind: PlaybackStreamKind
+        private let httpHeaderFields: [String: String]
         private let controller: MacVLCPlaybackController
         private var statusText: Binding<String>
         private var errorMessage: Binding<String?>
@@ -48,12 +45,19 @@ struct MacVLCPlayerView: NSViewRepresentable {
         private var didFail = false
         private var didConfigureAudio = false
         private var activeURL: URL?
+        private var lastVLCError: String?
+        private var lastPublishedState: VLCMediaPlayerState?
+        private var lastControllerSyncTime: CFAbsoluteTime = 0
 
         init(
+            streamKind: PlaybackStreamKind,
+            httpHeaderFields: [String: String],
             controller: MacVLCPlaybackController,
             statusText: Binding<String>,
             errorMessage: Binding<String?>
         ) {
+            self.streamKind = streamKind
+            self.httpHeaderFields = httpHeaderFields
             self.controller = controller
             self.statusText = statusText
             self.errorMessage = errorMessage
@@ -63,6 +67,13 @@ struct MacVLCPlayerView: NSViewRepresentable {
             player?.stop()
         }
 
+        func scheduleStart(in videoView: VLCVideoView, url: URL) {
+            DispatchQueue.main.async { [weak self, weak videoView] in
+                guard let self, let videoView else { return }
+                self.start(in: videoView, url: url)
+            }
+        }
+
         func start(in videoView: VLCVideoView, url: URL) {
             guard activeURL != url || player == nil else { return }
             stop()
@@ -70,16 +81,22 @@ struct MacVLCPlayerView: NSViewRepresentable {
             activeURL = url
             didFail = false
             didConfigureAudio = false
+            lastVLCError = nil
+            lastPublishedState = nil
+            lastControllerSyncTime = 0
             errorMessage.wrappedValue = nil
 
             let library = VLCLibrary.shared()
-            library.debugLogging = false
+            library.debugLogging = true
+            library.debugLoggingLevel = 1
+            library.debugLoggingTarget = self
 
             let media: VLCMedia = if url.isFileURL {
                 VLCMedia(path: url.path)
             } else {
                 VLCMedia(url: url)
             }
+            applyNetworkOptions(to: media, url: url)
 
             let player = VLCMediaPlayer(videoView: videoView)
             player.media = media
@@ -87,14 +104,9 @@ struct MacVLCPlayerView: NSViewRepresentable {
             self.player = player
             controller.player = player
 
+            NSLog("[EclipsePlex VLC] Opening \(streamKind) → %@", url.host ?? url.absoluteString)
             player.play()
             updateStatus { self.publishState(from: player) }
-        }
-
-        func restartIfNeeded(in videoView: VLCVideoView, url: URL) {
-            if activeURL != url {
-                start(in: videoView, url: url)
-            }
         }
 
         private func stop() {
@@ -116,11 +128,35 @@ struct MacVLCPlayerView: NSViewRepresentable {
         }
 
         func handleMessage(_ message: String, debugLevel level: Int32) {
-            if message.localizedCaseInsensitiveContains("403")
+            if level <= 1 {
+                NSLog("[EclipsePlex VLC] libvlc[\(level)]: %@", message)
+            }
+            if level <= 0
+                || message.localizedCaseInsensitiveContains("error")
+                || message.localizedCaseInsensitiveContains("403")
+                || message.localizedCaseInsensitiveContains("401")
                 || message.localizedCaseInsensitiveContains("can't be opened")
                 || message.localizedCaseInsensitiveContains("unable to open")
             {
-                fail(with: message)
+                lastVLCError = message
+            }
+        }
+
+        private func applyNetworkOptions(to media: VLCMedia, url: URL) {
+            guard !url.isFileURL else { return }
+            media.addOption(":http-user-agent=\(PlexHTTPConstants.productName)/\(PlexHTTPConstants.productVersion)")
+            media.addOption(":http-reconnect")
+            media.addOption(":network-caching=5000")
+            if !httpHeaderFields.isEmpty {
+                let lines = httpHeaderFields
+                    .map { key, value in
+                        let escaped = value
+                            .replacingOccurrences(of: "\r", with: "")
+                            .replacingOccurrences(of: "\n", with: "")
+                        return "\(key): \(escaped)"
+                    }
+                    .joined(separator: "\r\n")
+                media.addOption(":http-extra-headers=\(lines)\r\n")
             }
         }
 
@@ -146,19 +182,29 @@ struct MacVLCPlayerView: NSViewRepresentable {
         }
 
         private func publishState(from player: VLCMediaPlayer) {
-            controller.sync(from: player)
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastControllerSyncTime > 0.5 {
+                lastControllerSyncTime = now
+                controller.sync(from: player)
+            }
 
-            let name = stateName(player.state)
-            let ticks = player.time.intValue
-            statusText.wrappedValue = "\(name) · \(ticks)ms"
+            let state = player.state
+            guard state != lastPublishedState else { return }
+            lastPublishedState = state
 
-            switch player.state {
+            updateStatus {
+                let name = self.stateName(state)
+                self.statusText.wrappedValue = name
+            }
+
+            switch state {
             case .playing:
                 didFail = false
-                errorMessage.wrappedValue = nil
+                updateStatus { self.errorMessage.wrappedValue = nil }
                 configureAudioIfNeeded(player)
             case .error:
-                fail(with: "Playback failed. Check the URL or file path.")
+                let detail = lastVLCError ?? "The stream could not be opened."
+                fail(with: detail)
             default:
                 break
             }
@@ -171,14 +217,11 @@ struct MacVLCPlayerView: NSViewRepresentable {
                 self.errorMessage.wrappedValue = message
                 self.statusText.wrappedValue = "Error"
             }
+            NSLog("[EclipsePlex VLC] Playback failed: %@", message)
         }
 
         private func updateStatus(_ block: @escaping () -> Void) {
-            if Thread.isMainThread {
-                block()
-            } else {
-                DispatchQueue.main.async(execute: block)
-            }
+            DispatchQueue.main.async(execute: block)
         }
 
         private func stateName(_ state: VLCMediaPlayerState) -> String {

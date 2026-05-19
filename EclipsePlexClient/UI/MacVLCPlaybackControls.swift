@@ -4,14 +4,16 @@ import SwiftUI
 /// Transport bar for `MacVLCPlaybackController`.
 struct MacVLCPlaybackControls: View {
     @ObservedObject var controller: MacVLCPlaybackController
-    let onClose: () -> Void
+    var onClose: (() -> Void)? = nil
 
     @State private var scrubberMs: Double = 0
     @State private var isScrubbing = false
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
+            if let onClose {
+                closeBar(action: onClose)
+            }
             progressRow
             transportRow
         }
@@ -28,10 +30,12 @@ struct MacVLCPlaybackControls: View {
         }
     }
 
-    private var topBar: some View {
+    private func closeBar(action: @escaping () -> Void) -> some View {
         HStack {
-            Button("Close", action: onClose)
-                .keyboardShortcut(.escape, modifiers: [])
+            Button(action: action) {
+                Label("Done", systemImage: "chevron.backward")
+            }
+            .keyboardShortcut(.escape, modifiers: [])
             Spacer()
         }
         .padding(.bottom, 8)

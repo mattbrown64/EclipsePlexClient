@@ -121,6 +121,20 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         }
     }
 
+    /// Plex `ratingKey` for `/library/metadata/{id}` playback, when this row is playable.
+    var playbackRatingKey: String? {
+        switch self {
+        case .movie(let m): return m.ratingKey
+        case .episode(let e): return e.ratingKey
+        case .musicTrack(let t): return t.ratingKey
+        case .show, .season: return nil
+        }
+    }
+
+    var supportsVideoPlayback: Bool {
+        playbackRatingKey != nil
+    }
+
     /// Case-insensitive match on `listTitle` and `listSubtitle` (for local / fixture search).
     func matchesSearch(trimmedQuery: String) -> Bool {
         let q = trimmedQuery.trimmingCharacters(in: .whitespacesAndNewlines)

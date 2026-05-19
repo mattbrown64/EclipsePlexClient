@@ -66,10 +66,7 @@ struct MediaDetailView: View {
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
-            watchDemoNavigationLink
-            Text("Playback and full Plex metadata will go here.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            watchNavigationLink
         }
     }
 
@@ -97,10 +94,7 @@ struct MediaDetailView: View {
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
-            watchDemoNavigationLink
-            Text("Playback and progress sync will go here.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            watchNavigationLink
         }
     }
 
@@ -120,9 +114,7 @@ struct MediaDetailView: View {
             if let album = track.album { metaLine("Album", album) }
             metaLine("Library", library.title)
             metaLine("Server", plexServer.name)
-            Text("Audio playback will go here.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            watchNavigationLink
         }
     }
 
@@ -142,16 +134,30 @@ struct MediaDetailView: View {
         return String(format: "%d:%02d", m, s)
     }
 
-    /// Opens the bundled demo player (`ContentView`); replace with real stream URLs later.
-    private var watchDemoNavigationLink: some View {
-        NavigationLink {
-            ContentView()
-                .onAppear { sidebarInteraction.suppressSidebarInteraction = true }
-                .onDisappear { sidebarInteraction.suppressSidebarInteraction = false }
-        } label: {
-            Label("Watch", systemImage: "play.circle.fill")
+    @ViewBuilder
+    private var watchNavigationLink: some View {
+        if node.supportsVideoPlayback, let ratingKey = node.playbackRatingKey {
+            if plexServer.usesLivePlexAPI {
+                NavigationLink {
+                    ContentView(
+                        request: .plex(
+                            server: plexServer,
+                            ratingKey: ratingKey,
+                            title: detailTitle
+                        )
+                    )
+                    .onAppear { sidebarInteraction.suppressSidebarInteraction = true }
+                    .onDisappear { sidebarInteraction.suppressSidebarInteraction = false }
+                } label: {
+                    Label("Watch", systemImage: "play.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Text("Add a reachable server URL and Plex token to play this item.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .buttonStyle(.borderedProminent)
     }
 }
 

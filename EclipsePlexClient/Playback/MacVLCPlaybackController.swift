@@ -66,7 +66,6 @@ final class MacVLCPlaybackController: ObservableObject {
         positionMs = Int(player.time.intValue)
         durationMs = Int(player.media?.length.intValue ?? 0)
         isPlaying = player.isPlaying
-
         if let audio = player.audio {
             volume = Int(audio.volume)
             isMuted = audio.isMuted

@@ -1,166 +1,263 @@
 import SwiftUI
 
-/// Binds sheet presentation to a URL so the player always receives media on macOS.
-private struct PlaybackItem: Identifiable {
-    let id = UUID()
-    let url: URL
-}
-
+/// Full-screen video playback driven by `PlaybackRequest` (Plex, local file, or bundled demo).
 struct ContentView: View {
-    private static let sampleStream = URL(string: "https://vjs.zencdn.net/v/oceans.mp4")!
-    private static let bundledResource = (name: "Savior", ext: "mkv")
+    var request: PlaybackRequest?
 
-    @State private var playbackItem: PlaybackItem?
-    @State private var playerStatus = "Idle"
-    @State private var playerErrorMessage: String?
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var resolvedPlayback: ResolvedPlayback?
+    @State private var loadError: String?
+    @State private var loadingMessage = "Preparing playback…"
 
     var body: some View {
-        VStack(spacing: 12) {
-            if Bundle.main.url(forResource: Self.bundledResource.name, withExtension: Self.bundledResource.ext) != nil {
-                Button("Play bundled Savior.mkv") {
-                    openBundledVideo()
-                }
-                .buttonStyle(.borderedProminent)
+        Group {
+            if let resolvedPlayback {
+                VideoPlaybackView(
+                    playback: resolvedPlayback,
+                    onDone: { dismiss() }
+                )
+            } else if let loadError {
+                errorView(message: loadError)
             } else {
-                Text("Video 'Savior.mkv' not found in project bundle.")
-                    .foregroundStyle(.red)
-            }
-
-            Button("Play test stream (HTTP)") {
-                presentPlayer(url: Self.sampleStream)
-            }
-            .buttonStyle(.bordered)
-
-            if let playerErrorMessage, playbackItem == nil {
-                Text(playerErrorMessage)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                ProgressView(loadingMessage)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        #if os(iOS)
-        .fullScreenCover(item: $playbackItem, onDismiss: resetPlayerState) { item in
-            PlaybackSheetView(
-                url: item.url,
-                statusText: $playerStatus,
-                errorMessage: $playerErrorMessage,
-                onClose: { playbackItem = nil }
-            )
+        .background(.black)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button("Done", action: { dismiss() })
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
         }
-        #else
-        .sheet(item: $playbackItem, onDismiss: resetPlayerState) { item in
-            PlaybackSheetView(
-                url: item.url,
-                statusText: $playerStatus,
-                errorMessage: $playerErrorMessage,
-                onClose: { playbackItem = nil }
-            )
+        .navigationTitle(request?.displayTitle ?? "Playback")
+        .task(id: request) {
+            await resolvePlaybackURL()
         }
-        #endif
     }
 
-    private func presentPlayer(url: URL) {
-        playerErrorMessage = nil
-        playerStatus = "Opening…"
-        playbackItem = PlaybackItem(url: url)
+    private func errorView(message: String) -> some View {
+        VStack(spacing: 16) {
+            ContentUnavailableView {
+                Label("Cannot Play", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(message)
+            }
+            Button("Done", action: { dismiss() })
+                .buttonStyle(.bordered)
+        }
     }
 
-    private func openBundledVideo() {
-        guard let bundleURL = Bundle.main.url(
-            forResource: Self.bundledResource.name,
-            withExtension: Self.bundledResource.ext
-        ) else { return }
+    @MainActor
+    private func resolvePlaybackURL() async {
+        loadError = nil
+        resolvedPlayback = nil
+
+        let activeRequest = request ?? .bundledDemo
+
+        switch activeRequest {
+        case .plex:
+            loadingMessage = "Loading from Plex…"
+        case .remoteStream:
+            loadingMessage = "Opening stream…"
+        case .localFile:
+            loadingMessage = "Opening file…"
+        case .bundledDemo:
+            loadingMessage = "Preparing video…"
+        }
+
+        NSLog("[EclipsePlex] ContentView preparing playback…")
         do {
-            let url = try LocalMediaURL.forPlayback(bundleURL)
-            presentPlayer(url: url)
+            if case .plex = activeRequest {
+                loadingMessage = "Reading Plex metadata…"
+            }
+            resolvedPlayback = try await PlaybackResolver.resolve(activeRequest)
+            NSLog("[EclipsePlex] ContentView playback URL ready")
         } catch {
-            playerErrorMessage = error.localizedDescription
+            NSLog("[EclipsePlex] ContentView playback failed: %@", error.localizedDescription)
+            loadError = error.localizedDescription
         }
-    }
-
-    private func resetPlayerState() {
-        playerStatus = "Idle"
     }
 }
 
-// MARK: - Player sheet
+// MARK: - Inline player
 
-private struct PlaybackSheetView: View {
-    let url: URL
-    @Binding var statusText: String
-    @Binding var errorMessage: String?
-    let onClose: () -> Void
+private struct VideoPlaybackView: View {
+    let playback: ResolvedPlayback
+    let onDone: () -> Void
 
     #if os(macOS)
     @StateObject private var vlcController = MacVLCPlaybackController()
+    #else
+    @StateObject private var vlcProxy = VLCVideoPlayer.Proxy()
+    @State private var positionMs = 0
+    @State private var durationMs = 0
+    @State private var isPlaying = false
     #endif
+
+    @State private var statusText = "Opening…"
+    @State private var playerErrorMessage: String?
 
     var body: some View {
         Group {
             #if os(macOS)
             MacVLCPlayerView(
-                url: url,
+                url: playback.url,
+                streamKind: playback.streamKind,
+                httpHeaderFields: playback.httpHeaderFields,
                 controller: vlcController,
                 statusText: $statusText,
-                errorMessage: $errorMessage
+                errorMessage: $playerErrorMessage
             )
             #else
-            VLCVideoPlayer(configuration: .init(url: url))
+            VLCVideoPlayer(configuration: .init(url: playback.url, autoPlay: true))
+                .proxy(vlcProxy)
+                .onTicksUpdated { ticks, info in
+                    positionMs = ticks
+                    durationMs = info.length
+                }
                 .onStateUpdated { state, _ in
                     statusText = state.label
+                    isPlaying = state == .playing
                     if state == .error {
-                        errorMessage = "VLC could not play this file."
+                        playerErrorMessage = "VLC could not play this file."
                     }
                 }
             #endif
         }
-        .frame(minWidth: 960, minHeight: 540)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .topLeading) {
+            Button(action: onDone) {
+                Label("Done", systemImage: "chevron.backward")
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding()
+        }
         #if os(macOS)
         .overlay(alignment: .bottom) {
-            MacVLCPlaybackControls(controller: vlcController, onClose: onClose)
+            MacVLCPlaybackControls(controller: vlcController, onClose: onDone)
         }
         #else
-        .overlay(alignment: .top) {
-            iosPlayerChrome
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 0) {
+                IOSVLCPlaybackControls(
+                    proxy: vlcProxy,
+                    positionMs: $positionMs,
+                    durationMs: durationMs,
+                    isPlaying: isPlaying,
+                    onPlayPause: togglePlayPause
+                )
+                Button("Done", action: onDone)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial)
+            }
         }
         #endif
         .overlay {
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .padding()
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            if let playerErrorMessage {
+                VStack(spacing: 12) {
+                    Text(playerErrorMessage)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                    Button("Done", action: onDone)
+                        .buttonStyle(.bordered)
+                }
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
         }
         .background(.black)
-        .onAppear {
-            if statusText == "Idle" {
-                statusText = "Opening…"
-            }
-        }
     }
 
     #if !os(macOS)
-    private var iosPlayerChrome: some View {
-        VStack {
-            HStack {
-                Button("Close", action: onClose)
-                    .buttonStyle(.bordered)
-                Spacer()
-                Text(statusText)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-            }
-            .padding()
-            Spacer()
+    private func togglePlayPause() {
+        if isPlaying {
+            vlcProxy.pause()
+        } else {
+            vlcProxy.play()
         }
     }
     #endif
 }
+
+#if os(iOS)
+/// Transport bar for VLCUI on iOS (mirrors macOS controls).
+private struct IOSVLCPlaybackControls: View {
+    @ObservedObject var proxy: VLCVideoPlayer.Proxy
+    @Binding var positionMs: Int
+    let durationMs: Int
+    let isPlaying: Bool
+    let onPlayPause: () -> Void
+
+    @State private var scrubberMs: Double = 0
+    @State private var isScrubbing = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Text(format(ms: positionMs))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, alignment: .trailing)
+
+                Slider(
+                    value: $scrubberMs,
+                    in: 0 ... max(Double(durationMs), 1),
+                    onEditingChanged: { editing in
+                        isScrubbing = editing
+                        if !editing {
+                            proxy.setTime(.ticks(Int(scrubberMs)))
+                        }
+                    }
+                )
+                .disabled(durationMs <= 0)
+
+                Text(format(ms: durationMs))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, alignment: .leading)
+            }
+
+            HStack(spacing: 20) {
+                Button { proxy.jumpBackward(10) } label: {
+                    Image(systemName: "gobackward.10")
+                }
+                Button(action: onPlayPause) {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.title2)
+                }
+                Button { proxy.jumpForward(10) } label: {
+                    Image(systemName: "goforward.10")
+                }
+            }
+            .buttonStyle(.plain)
+            .labelStyle(.iconOnly)
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .onChange(of: positionMs) { _, position in
+            if !isScrubbing {
+                scrubberMs = Double(position)
+            }
+        }
+        .onAppear {
+            scrubberMs = Double(positionMs)
+        }
+    }
+
+    private func format(ms: Int) -> String {
+        guard ms > 0 else { return "0:00" }
+        let s = ms / 1000
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+#endif
 
 #if !os(macOS)
 private extension VLCVideoPlayer.State {
@@ -180,5 +277,7 @@ private extension VLCVideoPlayer.State {
 #endif
 
 #Preview {
-    ContentView()
+    NavigationStack {
+        ContentView()
+    }
 }
