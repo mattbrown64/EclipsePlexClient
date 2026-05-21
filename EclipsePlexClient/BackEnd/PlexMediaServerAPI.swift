@@ -46,11 +46,11 @@ nonisolated enum PlexHTTPConstants {
 
 // MARK: - JSON DTOs
 
-private nonisolated struct PlexMediaRoot: Decodable {
+nonisolated struct PlexMediaRoot: Decodable {
     let MediaContainer: PlexMediaContainerDecoded
 }
 
-private nonisolated struct PlexMediaContainerDecoded: Decodable {
+nonisolated struct PlexMediaContainerDecoded: Decodable {
     let size: Int?
     let totalSize: Int?
     let offset: Int?
@@ -64,7 +64,7 @@ private nonisolated struct PlexMediaContainerDecoded: Decodable {
 }
 
 /// Plex sometimes returns a single object or an array for `Metadata` / `Directory`.
-private nonisolated struct PlexRecordList: Decodable {
+nonisolated struct PlexRecordList: Decodable {
     let values: [PlexRecordDTO]
 
     init(from decoder: Decoder) throws {
@@ -80,7 +80,7 @@ private nonisolated struct PlexRecordList: Decodable {
     }
 }
 
-private nonisolated enum PlexTypeField: Decodable, Hashable {
+nonisolated enum PlexTypeField: Decodable, Hashable {
     case int(Int)
     case string(String)
 
@@ -98,7 +98,7 @@ private nonisolated enum PlexTypeField: Decodable, Hashable {
     }
 }
 
-private nonisolated enum PlexKind: Hashable {
+nonisolated enum PlexKind: Hashable {
     case movie, show, season, episode
     case artist, album, track
     case photo
@@ -135,13 +135,36 @@ private nonisolated enum PlexKind: Hashable {
             case "album": self = .album
             case "track": self = .track
             case "photo": self = .photo
+            case "collection": self = .show
+            case "playlist": self = .unknown
             default: self = .unknown
             }
         }
     }
 }
 
-private nonisolated struct PlexRecordDTO: Decodable {
+nonisolated struct PlexTagDTO: Decodable {
+    let tag: String?
+    let key: String?
+}
+
+nonisolated struct PlexTagList: Decodable {
+    let values: [PlexTagDTO]
+
+    init(from decoder: Decoder) throws {
+        if var unkeyed = try? decoder.unkeyedContainer() {
+            var out: [PlexTagDTO] = []
+            while !unkeyed.isAtEnd {
+                out.append(try unkeyed.decode(PlexTagDTO.self))
+            }
+            self.values = out
+            return
+        }
+        self.values = [try PlexTagDTO(from: decoder)]
+    }
+}
+
+nonisolated struct PlexRecordDTO: Decodable {
     let ratingKey: String?
     let key: String?
     let title: String?
@@ -152,56 +175,93 @@ private nonisolated struct PlexRecordDTO: Decodable {
     let thumb: String?
     let parentRatingKey: String?
     let parentTitle: String?
+    let parentThumb: String?
+    let grandparentRatingKey: String?
     let grandparentTitle: String?
+    let grandparentThumb: String?
     let index: Int?
     let parentIndex: Int?
     let duration: Int?
+    let addedAt: Int?
+    let originallyAvailableAt: Int?
+    let viewOffset: Int?
+    let viewCount: Int?
+    let lastViewedAt: Int?
+    let librarySectionID: String?
+    let sort: String?
+    let tag: String?
+    let contentRating: String?
+    let studio: String?
+    let rating: Double?
+    let audienceRating: Double?
+    let genres: [String]
+    let directors: [String]
+    let cast: [String]
+    let markers: [PlexMarkerRecord]
 
     enum CodingKeys: String, CodingKey {
         case ratingKey, key, title, name, type, year, summary, thumb
-        case parentRatingKey, parentTitle, grandparentTitle, index, parentIndex, duration
+        case parentRatingKey, parentTitle, parentThumb
+        case grandparentRatingKey, grandparentTitle, grandparentThumb
+        case index, parentIndex, duration
+        case addedAt, originallyAvailableAt, viewOffset, viewCount, lastViewedAt
+        case librarySectionID, sort, tag
+        case contentRating, studio, rating, audienceRating
+        case Genre, Director, Role, Marker
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        if let rk = try? c.decode(String.self, forKey: .ratingKey) {
-            ratingKey = rk
-        } else if let rk = try? c.decode(Int.self, forKey: .ratingKey) {
-            ratingKey = String(rk)
-        } else {
-            ratingKey = nil
-        }
-        if c.contains(.key) {
-            if let ks = try? c.decode(String.self, forKey: .key) {
-                key = ks
-            } else if let ki = try? c.decode(Int.self, forKey: .key) {
-                key = String(ki)
-            } else {
-                key = nil
-            }
-        } else {
-            key = nil
-        }
+        ratingKey = Self.decodeFlexString(c, key: .ratingKey)
+        key = Self.decodeFlexString(c, key: .key)
         title = try? c.decodeIfPresent(String.self, forKey: .title)
         name = try? c.decodeIfPresent(String.self, forKey: .name)
         type = try? c.decodeIfPresent(PlexTypeField.self, forKey: .type)
-        year = try? c.decodeIfPresent(Int.self, forKey: .year)
+        year = Self.decodeFlexInt(c, key: .year)
         summary = try? c.decodeIfPresent(String.self, forKey: .summary)
         thumb = try? c.decodeIfPresent(String.self, forKey: .thumb)
-
-        if let prk = try? c.decode(String.self, forKey: .parentRatingKey) {
-            parentRatingKey = prk
-        } else if let prk = try? c.decode(Int.self, forKey: .parentRatingKey) {
-            parentRatingKey = String(prk)
-        } else {
-            parentRatingKey = nil
-        }
-
+        parentRatingKey = Self.decodeFlexString(c, key: .parentRatingKey)
         parentTitle = try? c.decodeIfPresent(String.self, forKey: .parentTitle)
+        parentThumb = try? c.decodeIfPresent(String.self, forKey: .parentThumb)
+        grandparentRatingKey = Self.decodeFlexString(c, key: .grandparentRatingKey)
         grandparentTitle = try? c.decodeIfPresent(String.self, forKey: .grandparentTitle)
-        index = try? c.decodeIfPresent(Int.self, forKey: .index)
-        parentIndex = try? c.decodeIfPresent(Int.self, forKey: .parentIndex)
-        duration = try? c.decodeIfPresent(Int.self, forKey: .duration)
+        grandparentThumb = try? c.decodeIfPresent(String.self, forKey: .grandparentThumb)
+        index = Self.decodeFlexInt(c, key: .index)
+        parentIndex = Self.decodeFlexInt(c, key: .parentIndex)
+        duration = Self.decodeFlexInt(c, key: .duration)
+        addedAt = Self.decodeUnixTimestamp(c, key: .addedAt)
+        originallyAvailableAt = Self.decodeUnixTimestamp(c, key: .originallyAvailableAt)
+        viewOffset = Self.decodeFlexInt(c, key: .viewOffset)
+        viewCount = Self.decodeFlexInt(c, key: .viewCount)
+        lastViewedAt = Self.decodeUnixTimestamp(c, key: .lastViewedAt)
+        librarySectionID = Self.decodeFlexString(c, key: .librarySectionID)
+        sort = try? c.decodeIfPresent(String.self, forKey: .sort)
+        tag = try? c.decodeIfPresent(String.self, forKey: .tag)
+        contentRating = try? c.decodeIfPresent(String.self, forKey: .contentRating)
+        studio = try? c.decodeIfPresent(String.self, forKey: .studio)
+        rating = Self.decodeFlexDouble(c, key: .rating)
+        audienceRating = Self.decodeFlexDouble(c, key: .audienceRating)
+        genres = Self.decodeTags(c, key: .Genre)
+        directors = Self.decodeTags(c, key: .Director)
+        cast = Self.decodeTags(c, key: .Role)
+        markers = Self.decodeMarkers(from: c)
+    }
+
+    private static func decodeMarkers(from c: KeyedDecodingContainer<CodingKeys>) -> [PlexMarkerRecord] {
+        guard c.contains(.Marker) else { return [] }
+        if var unkeyed = try? c.nestedUnkeyedContainer(forKey: .Marker) {
+            var out: [PlexMarkerRecord] = []
+            while !unkeyed.isAtEnd {
+                if let m = try? unkeyed.decode(PlexMarkerRecord.self) {
+                    out.append(m)
+                }
+            }
+            return out
+        }
+        if let single = try? c.decode(PlexMarkerRecord.self, forKey: .Marker) {
+            return [single]
+        }
+        return []
     }
 
     var displayTitle: String {
@@ -209,18 +269,77 @@ private nonisolated struct PlexRecordDTO: Decodable {
         if !t.isEmpty { return t }
         let n = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !n.isEmpty { return n }
+        let g = tag?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !g.isEmpty { return g }
         return "Untitled"
     }
 
     var kind: PlexKind { PlexKind(plexTypeField: type) }
+
+    var isWatchedByViewCount: Bool {
+        guard let viewCount, viewCount > 0 else { return false }
+        guard let duration, duration > 0, let viewOffset else { return true }
+        return viewOffset >= duration - 30_000
+    }
+
+    private static func decodeFlexString(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> String? {
+        if let value = try? c.decode(String.self, forKey: key) {
+            return value
+        }
+        if let value = try? c.decode(Int.self, forKey: key) {
+            return String(value)
+        }
+        return nil
+    }
+
+    private static func decodeFlexInt(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Int? {
+        if let value = try? c.decode(Int.self, forKey: key) { return value }
+        if let text = try? c.decode(String.self, forKey: key) {
+            return Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    private static func decodeFlexDouble(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Double? {
+        if let value = try? c.decode(Double.self, forKey: key) { return value }
+        if let value = try? c.decode(Int.self, forKey: key) { return Double(value) }
+        if let text = try? c.decode(String.self, forKey: key) {
+            return Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    private static func decodeUnixTimestamp(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Int? {
+        decodeFlexInt(c, key: key)
+    }
+
+    private static func decodeTags(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> [String] {
+        guard let tags = try? c.decode(PlexTagList.self, forKey: key) else { return [] }
+        return tags.values.compactMap { $0.tag ?? $0.key }.filter { !$0.isEmpty }
+    }
 }
 
 // MARK: - Client
 
 nonisolated struct PlexMediaServerClient: Sendable {
-    private let origin: URL
-    private let token: String
-    private let session: URLSession
+    let origin: URL
+    let token: String
+    let session: URLSession
 
     init(server: PlexServer, session: URLSession = .shared) throws {
         guard server.usesLivePlexAPI,
@@ -262,7 +381,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
                 let typeCode = plexSectionTypeCode(for: record)
                 return PlexLibrary(
                     serverId: serverId,
-                    sectionKey: key,
+                    sectionKey: PlexLibrary.normalizeSectionKey(key),
                     title: title,
                     type: typeCode,
                     thumbPath: record.thumb,
@@ -270,183 +389,202 @@ nonisolated struct PlexMediaServerClient: Sendable {
                     uuid: record.ratingKey,
                     agent: nil,
                     scanner: nil,
-                    language: nil
+                    language: nil,
+                    plexDefaultSortKey: record.sort
                 )
             }
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
-    func catalogNodes(library: PlexLibrary, parent: PlexCatalogParent) async throws -> [PlexCatalogNode] {
-        switch library.sectionType {
-        case .movie:
-            guard case .root = parent else { return [] }
-            let rows = try await fetchAllRecords(path: "/library/sections/\(library.sectionKey)/all")
-            return rows.compactMap { mapMovie($0) }
-        case .photo:
-            guard case .root = parent else { return [] }
-            let rows = try await fetchAllRecords(path: "/library/sections/\(library.sectionKey)/all")
-            return rows.compactMap { row in
-                if row.kind == .photo || row.kind == .movie { return mapMovie(row) }
-                return mapMovie(row)
-            }
-        case .show:
-            return try await tvNodes(library: library, parent: parent)
-        case .music:
-            return try await musicNodes(library: library, parent: parent)
-        case .other:
-            guard case .root = parent else { return [] }
-            let rows = try await fetchAllRecords(path: "/library/sections/\(library.sectionKey)/all")
-            var out: [PlexCatalogNode] = []
-            out.append(contentsOf: rows.compactMap { mapMovie($0) })
-            out.append(contentsOf: rows.compactMap { mapShow($0) })
-            return out
-        }
-    }
-
-    // MARK: - TV
-
-    private func tvNodes(library: PlexLibrary, parent: PlexCatalogParent) async throws -> [PlexCatalogNode] {
-        switch parent {
-        case .root:
-            let rows = try await fetchAllRecords(path: "/library/sections/\(library.sectionKey)/all")
-            return rows.filter { $0.kind == .show }.compactMap { mapShow($0) }
-        case .show(let ratingKey):
-            let rows = try await fetchAllRecords(path: "/library/metadata/\(ratingKey)/children")
-            if rows.contains(where: { $0.kind == .episode }) {
-                return rows.filter { $0.kind == .episode }.compactMap { mapEpisode($0) }
-            }
-            return rows.filter { $0.kind == .season }.compactMap { mapSeason($0) }
-        case .season(let ratingKey):
-            let rows = try await fetchAllRecords(path: "/library/metadata/\(ratingKey)/children")
-            return rows.filter { $0.kind == .episode }.compactMap { mapEpisode($0) }
-        }
-    }
-
-    // MARK: - Music (artist → album → track)
-
-    private func musicNodes(library: PlexLibrary, parent: PlexCatalogParent) async throws -> [PlexCatalogNode] {
-        switch parent {
-        case .root:
-            let rows = try await fetchAllRecords(path: "/library/sections/\(library.sectionKey)/all")
-            if rows.contains(where: { $0.kind == .artist }) {
-                return rows.filter { $0.kind == .artist }.compactMap { mapShow($0) }
-            }
-            if rows.contains(where: { $0.kind == .album }) {
-                return rows.filter { $0.kind == .album }.compactMap { mapSeasonFromAlbum($0, artistName: nil) }
-            }
-            return rows.filter { $0.kind == .track }.compactMap { mapMusicTrack($0) }
-        case .show(let artistKey):
-            let rows = try await fetchAllRecords(path: "/library/metadata/\(artistKey)/children")
-            let artistName = rows.compactMap(\.parentTitle).first
-            if rows.contains(where: { $0.kind == .track }) {
-                return rows.filter { $0.kind == .track }.compactMap { mapMusicTrack($0) }
-            }
-            return rows.filter { $0.kind == .album }.compactMap { mapSeasonFromAlbum($0, artistName: artistName) }
-        case .season(let albumKey):
-            let rows = try await fetchAllRecords(path: "/library/metadata/\(albumKey)/children")
-            return rows.filter { $0.kind == .track }.compactMap { mapMusicTrack($0) }
-        }
-    }
-
     // MARK: - Mapping
 
-    private func mapMovie(_ r: PlexRecordDTO) -> PlexCatalogNode? {
+    func catalogNodeMapper(_ rows: [PlexRecordDTO], startOrder: Int = 0) -> [PlexCatalogNode] {
+        rows.enumerated().compactMap { index, row in
+            catalogNodeForRecord(row, libraryOrder: startOrder + index)
+        }
+    }
+
+    func catalogNodeForRecord(_ r: PlexRecordDTO, libraryOrder: Int) -> PlexCatalogNode? {
+        switch r.kind {
+        case .movie, .photo:
+            return mapMovie(r, libraryOrder: libraryOrder)
+        case .show, .artist:
+            return mapShow(r, libraryOrder: libraryOrder)
+        case .season:
+            return mapSeason(r, libraryOrder: libraryOrder)
+        case .episode:
+            return mapEpisode(r, libraryOrder: libraryOrder)
+        case .album:
+            return mapSeasonFromAlbum(r, artistName: r.grandparentTitle ?? r.parentTitle, libraryOrder: libraryOrder)
+        case .track:
+            return mapMusicTrack(r, libraryOrder: libraryOrder)
+        case .unknown:
+            if let node = mapMovie(r, libraryOrder: libraryOrder) { return node }
+            if let node = mapShow(r, libraryOrder: libraryOrder) { return node }
+            return nil
+        }
+    }
+
+    func mapMovie(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexCatalogNode? {
         guard let rk = r.ratingKey, r.kind == .movie || r.kind == .photo || r.kind == .unknown else { return nil }
         if r.kind == .show || r.kind == .season || r.kind == .episode { return nil }
-        return .movie(
-            PlexMovieSummary(
-                ratingKey: rk,
-                title: r.displayTitle,
-                year: r.year,
-                summary: r.summary,
-                thumbPath: r.thumb
-            )
+        var summary = PlexMovieSummary(
+            ratingKey: rk,
+            title: r.displayTitle,
+            year: r.year,
+            summary: r.summary,
+            thumbPath: r.thumb
         )
+        summary.libraryOrder = libraryOrder
+        summary.addedAt = r.addedAt
+        summary.originallyAvailableAt = r.originallyAvailableAt
+        summary.viewOffsetMs = r.viewOffset
+        summary.durationMs = r.duration
+        summary.viewCount = r.viewCount
+        return .movie(summary)
     }
 
-    private func mapShow(_ r: PlexRecordDTO) -> PlexCatalogNode? {
+    func mapShow(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexCatalogNode? {
         guard let rk = r.ratingKey, r.kind == .show || r.kind == .artist else { return nil }
-        return .show(
-            PlexShowSummary(
-                ratingKey: rk,
-                title: r.displayTitle,
-                year: r.year,
-                summary: r.summary,
-                thumbPath: r.thumb
-            )
+        var summary = PlexShowSummary(
+            ratingKey: rk,
+            title: r.displayTitle,
+            year: r.year,
+            summary: r.summary,
+            thumbPath: r.thumb
         )
+        summary.libraryOrder = libraryOrder
+        summary.addedAt = r.addedAt
+        summary.originallyAvailableAt = r.originallyAvailableAt
+        return .show(summary)
     }
 
-    private func mapSeason(_ r: PlexRecordDTO) -> PlexCatalogNode? {
+    func mapSeason(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexCatalogNode? {
         guard let rk = r.ratingKey, r.kind == .season else { return nil }
         let seasonNum = r.index ?? r.parentIndex ?? 0
         let showTitle = r.grandparentTitle ?? r.parentTitle ?? ""
-        let prk = r.parentRatingKey ?? ""
+        let prk = r.parentRatingKey ?? r.grandparentRatingKey ?? ""
         let label = r.displayTitle.contains("Season") ? r.displayTitle : "Season \(seasonNum)"
-        return .season(
-            PlexSeasonSummary(
-                ratingKey: rk,
-                parentRatingKey: prk,
-                showTitle: showTitle,
-                seasonNumber: seasonNum,
-                title: label,
-                thumbPath: r.thumb
-            )
+        var summary = PlexSeasonSummary(
+            ratingKey: rk,
+            parentRatingKey: prk,
+            showTitle: showTitle,
+            seasonNumber: seasonNum,
+            title: label,
+            thumbPath: r.thumb
         )
+        summary.libraryOrder = libraryOrder
+        return .season(summary)
     }
 
-    private func mapSeasonFromAlbum(_ r: PlexRecordDTO, artistName: String?) -> PlexCatalogNode? {
+    func mapSeasonFromAlbum(
+        _ r: PlexRecordDTO,
+        artistName: String?,
+        libraryOrder: Int = 0
+    ) -> PlexCatalogNode? {
         guard let rk = r.ratingKey, r.kind == .album else { return nil }
         let artist = artistName ?? r.parentTitle ?? r.grandparentTitle ?? ""
         let prk = r.parentRatingKey ?? ""
         let disc = r.parentIndex ?? r.index ?? 0
-        return .season(
-            PlexSeasonSummary(
-                ratingKey: rk,
-                parentRatingKey: prk,
-                showTitle: artist,
-                seasonNumber: disc,
-                title: r.displayTitle,
-                thumbPath: r.thumb
-            )
+        var summary = PlexSeasonSummary(
+            ratingKey: rk,
+            parentRatingKey: prk,
+            showTitle: artist,
+            seasonNumber: disc,
+            title: r.displayTitle,
+            thumbPath: r.thumb
         )
+        summary.libraryOrder = libraryOrder
+        return .season(summary)
     }
 
-    private func mapEpisode(_ r: PlexRecordDTO) -> PlexCatalogNode? {
+    func mapEpisode(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexCatalogNode? {
         guard let rk = r.ratingKey, r.kind == .episode else { return nil }
         let seasonNum = r.parentIndex ?? r.index ?? 0
         let epNum = r.index ?? 0
-        let showTitle = r.grandparentTitle ?? ""
+        let showTitle = r.grandparentTitle ?? r.parentTitle ?? ""
         let prk = r.parentRatingKey ?? ""
-        return .episode(
-            PlexEpisodeSummary(
-                ratingKey: rk,
-                parentRatingKey: prk,
-                showTitle: showTitle,
-                seasonNumber: seasonNum,
-                episodeNumber: epNum,
-                title: r.displayTitle,
-                summary: r.summary,
-                durationSeconds: r.duration.map { $0 / 1000 },
-                thumbPath: r.thumb
-            )
+        var summary = PlexEpisodeSummary(
+            ratingKey: rk,
+            parentRatingKey: prk,
+            showRatingKey: r.grandparentRatingKey,
+            showTitle: showTitle,
+            seasonNumber: seasonNum,
+            episodeNumber: epNum,
+            title: r.displayTitle,
+            summary: r.summary,
+            durationSeconds: r.duration.map { $0 / 1000 },
+            thumbPath: r.thumb
         )
+        summary.libraryOrder = libraryOrder
+        summary.showThumbPath = r.grandparentThumb
+        summary.viewOffsetMs = r.viewOffset
+        summary.durationMs = r.duration
+        summary.viewCount = r.viewCount
+        return .episode(summary)
     }
 
-    private func mapMusicTrack(_ r: PlexRecordDTO) -> PlexCatalogNode? {
+    func mapMusicTrack(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexCatalogNode? {
         guard let rk = r.ratingKey, r.kind == .track else { return nil }
-        return .musicTrack(
-            PlexMusicTrackSummary(
-                ratingKey: rk,
-                title: r.displayTitle,
-                album: r.parentTitle,
-                artist: r.grandparentTitle,
-                thumbPath: r.thumb
-            )
+        var summary = PlexMusicTrackSummary(
+            ratingKey: rk,
+            title: r.displayTitle,
+            album: r.parentTitle,
+            artist: r.grandparentTitle,
+            thumbPath: r.thumb
+        )
+        summary.libraryOrder = libraryOrder
+        return .musicTrack(summary)
+    }
+
+    func mapPlaylist(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexPlaylistSummary? {
+        guard let rk = r.ratingKey else { return nil }
+        var summary = PlexPlaylistSummary(
+            ratingKey: rk,
+            title: r.displayTitle,
+            summary: r.summary,
+            thumbPath: r.thumb
+        )
+        summary.libraryOrder = libraryOrder
+        return summary
+    }
+
+    func mapCollection(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexCollectionSummary? {
+        guard let rk = r.ratingKey else { return nil }
+        var summary = PlexCollectionSummary(
+            ratingKey: rk,
+            title: r.displayTitle,
+            summary: r.summary,
+            thumbPath: r.thumb
+        )
+        summary.libraryOrder = libraryOrder
+        return summary
+    }
+
+    func mediaDetail(from r: PlexRecordDTO) -> PlexMediaDetail? {
+        guard let rk = r.ratingKey else { return nil }
+        return PlexMediaDetail(
+            ratingKey: rk,
+            title: r.displayTitle,
+            summary: r.summary,
+            year: r.year,
+            thumbPath: r.thumb,
+            durationMs: r.duration,
+            viewOffsetMs: r.viewOffset,
+            viewCount: r.viewCount,
+            contentRating: r.contentRating,
+            studio: r.studio,
+            rating: r.rating,
+            audienceRating: r.audienceRating,
+            genres: r.genres,
+            directors: r.directors,
+            cast: r.cast,
+            markers: PlexPlaybackMarkerParser.markers(from: r.markers),
+            node: catalogNodeForRecord(r, libraryOrder: 0)
         )
     }
 
-    private func plexSectionTypeCode(for record: PlexRecordDTO) -> Int {
+    func plexSectionTypeCode(for record: PlexRecordDTO) -> Int {
         switch record.kind {
         case .movie: return 1
         case .show: return 2
@@ -471,7 +609,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
 
     // MARK: - Network
 
-    private func fetchAllRecords(path: String, extraQuery: [URLQueryItem] = []) async throws -> [PlexRecordDTO] {
+    func fetchAllRecords(path: String, extraQuery: [URLQueryItem] = []) async throws -> [PlexRecordDTO] {
         var all: [PlexRecordDTO] = []
         var start = 0
         let pageSize = 200
@@ -493,7 +631,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
     }
 
     /// One HTTP request (one page).
-    private func fetchOnePage(path: String, query: [URLQueryItem]) async throws -> PlexMediaContainerDecoded {
+    func fetchOnePage(path: String, query: [URLQueryItem]) async throws -> PlexMediaContainerDecoded {
         let req = try makeRequest(path: path, query: query)
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else {
@@ -511,7 +649,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
         }
     }
 
-    private func makeRequest(path: String, query: [URLQueryItem]) throws -> URLRequest {
+    func makeRequest(path: String, query: [URLQueryItem]) throws -> URLRequest {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         let relativePath = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
         guard let url = URL(string: relativePath, relativeTo: origin)?.absoluteURL else {
@@ -598,7 +736,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
         )
     }
 
-    private func makeTranscodeStream(
+    func makeTranscodeStream(
         endpoint: String,
         query: [URLQueryItem],
         vlcHeaders: [String: String],
@@ -612,7 +750,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
         return PlexPlaybackStream(url: request.url!, delivery: delivery, httpHeaderFields: vlcHeaders)
     }
 
-    private func makeStreamRequest(
+    func makeStreamRequest(
         path: String,
         query: [URLQueryItem],
         accept: String = "*/*"
@@ -635,7 +773,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
         return components.string ?? url.absoluteString
     }
 
-    private func fetchPlaybackSources(ratingKey: String) async throws -> PlexPlaybackXMLParser.Sources {
+    func fetchPlaybackSources(ratingKey: String) async throws -> PlexPlaybackXMLParser.Sources {
         NSLog("[EclipsePlex Plex] fetching metadata…")
         var request = try makeRequest(path: "/library/metadata/\(ratingKey)", query: [])
         request.setValue("application/xml", forHTTPHeaderField: "Accept")

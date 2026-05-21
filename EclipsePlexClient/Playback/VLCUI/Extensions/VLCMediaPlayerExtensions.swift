@@ -8,7 +8,7 @@ import UIKit
 import VLCKit
 #elseif os(tvOS)
 import TVVLCKit
-#else
+#elseif canImport(MobileVLCKit)
 import MobileVLCKit
 #endif
 

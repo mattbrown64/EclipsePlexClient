@@ -3,6 +3,7 @@
 //  EclipsePlexClient
 //
 
+import CoreGraphics
 import Foundation
 
 /// Plex JSON metadata often omits `Media`/`Part`; XML includes them for stream URLs.
@@ -52,6 +53,72 @@ nonisolated enum PlexPlaybackXMLParser {
         let partKey: String?
         /// e.g. `/video/:/transcode/universal/start.m3u8?...`
         let transcodeResourcePath: String?
+    }
+
+    nonisolated struct MetadataExtras: Sendable {
+        let subtitleStreams: [PlexSubtitleStream]
+        let sourceVideoSize: CGSize?
+    }
+
+    static func parseMetadataExtras(_ xml: String) -> MetadataExtras {
+        var streams: [PlexSubtitleStream] = []
+        if let regex = try? NSRegularExpression(
+            pattern: #"<Stream[^>]*streamType="3"[^>]*\bid="(\d+)"[^>]*>"#,
+            options: []
+        ) {
+            let range = NSRange(xml.startIndex..., in: xml)
+            for match in regex.matches(in: xml, range: range) {
+                guard match.numberOfRanges > 1,
+                      let idRange = Range(match.range(at: 1), in: xml),
+                      let fullRange = Range(match.range, in: xml) else { continue }
+                let id = String(xml[idRange])
+                let snippet = String(xml[fullRange])
+                let title = firstCapture(#"(?:title|language)="([^"]+)""#, in: snippet) ?? "Subtitle"
+                streams.append(PlexSubtitleStream(id: id, displayName: title))
+            }
+        }
+
+        let width = firstCapture(#"<Media[^>]*\bwidth="(\d+)""#, in: xml).flatMap(Int.init)
+        let height = firstCapture(#"<Media[^>]*\bheight="(\d+)""#, in: xml).flatMap(Int.init)
+        let size: CGSize?
+        if let width, let height, width > 0, height > 0 {
+            size = CGSize(width: width, height: height)
+        } else {
+            size = nil
+        }
+        return MetadataExtras(subtitleStreams: streams, sourceVideoSize: size)
+    }
+
+    /// Intro/credits markers are present in metadata XML but often missing from JSON.
+    static func parseMarkers(_ xml: String) -> [PlexPlaybackMarker] {
+        guard let regex = try? NSRegularExpression(pattern: #"<Marker\b[^>]*>"#, options: []) else {
+            return []
+        }
+        let range = NSRange(xml.startIndex..., in: xml)
+        return regex.matches(in: xml, range: range).compactMap { match in
+            guard let tagRange = Range(match.range, in: xml) else { return nil }
+            return parseMarkerTag(String(xml[tagRange]))
+        }
+    }
+
+    private static func parseMarkerTag(_ tag: String) -> PlexPlaybackMarker? {
+        guard let typeRaw = firstCapture(#"\btype="([^"]+)""#, in: tag) else { return nil }
+        let start = markerOffset(named: "startTimeOffset", in: tag)
+            ?? markerOffset(named: "startOffset", in: tag)
+            ?? 0
+        guard let end = markerOffset(named: "endTimeOffset", in: tag)
+            ?? markerOffset(named: "endOffset", in: tag),
+              end > start
+        else { return nil }
+        let records = [PlexMarkerRecord(type: typeRaw, startTimeOffset: start, endTimeOffset: end)]
+        return PlexPlaybackMarkerParser.markers(from: records).first
+    }
+
+    private static func markerOffset(named name: String, in tag: String) -> Int? {
+        firstCapture(
+            #"\b"# + NSRegularExpression.escapedPattern(for: name) + #"="(\d+)""#,
+            in: tag
+        ).flatMap(Int.init)
     }
 
     static func parseDecision(_ xml: String) -> Decision? {

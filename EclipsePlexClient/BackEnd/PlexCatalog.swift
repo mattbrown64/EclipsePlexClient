@@ -5,10 +5,7 @@
 
 import Foundation
 
-// MARK: - Summary structs (per-kind fields; maps from Plex API later)
-//
-// `thumbPath` holds server-relative Plex art URLs (e.g. `Video.thumb`, `Directory.thumb`).
-// Resolve with `PlexServer.catalogArtworkURL(relativeThumbPath:)`.
+// MARK: - Summary structs
 
 nonisolated struct PlexMovieSummary: Identifiable, Hashable, Sendable {
     let ratingKey: String
@@ -16,6 +13,40 @@ nonisolated struct PlexMovieSummary: Identifiable, Hashable, Sendable {
     let year: Int?
     let summary: String?
     let thumbPath: String?
+    var libraryOrder: Int = 0
+    var addedAt: Int?
+    var originallyAvailableAt: Int?
+    var viewOffsetMs: Int?
+    var durationMs: Int?
+    var viewCount: Int?
+
+    var id: String { ratingKey }
+
+    var watchProgressFraction: Double? {
+        PlexWatchProgress.fraction(viewOffsetMs: viewOffsetMs, durationMs: durationMs)
+    }
+
+    var isWatched: Bool {
+        (viewCount ?? 0) > 0 && watchProgressFraction == nil
+    }
+}
+
+nonisolated struct PlexPlaylistSummary: Identifiable, Hashable, Sendable {
+    let ratingKey: String
+    let title: String
+    let summary: String?
+    let thumbPath: String?
+    var libraryOrder: Int = 0
+
+    var id: String { ratingKey }
+}
+
+nonisolated struct PlexCollectionSummary: Identifiable, Hashable, Sendable {
+    let ratingKey: String
+    let title: String
+    let summary: String?
+    let thumbPath: String?
+    var libraryOrder: Int = 0
 
     var id: String { ratingKey }
 }
@@ -26,8 +57,19 @@ nonisolated struct PlexShowSummary: Identifiable, Hashable, Sendable {
     let year: Int?
     let summary: String?
     let thumbPath: String?
+    var libraryOrder: Int = 0
+    var addedAt: Int?
+    var originallyAvailableAt: Int?
 
     var id: String { ratingKey }
+}
+
+nonisolated enum PlexWatchProgress {
+    nonisolated static func fraction(viewOffsetMs: Int?, durationMs: Int?) -> Double? {
+        guard let durationMs, durationMs > 0, let viewOffsetMs, viewOffsetMs > 0 else { return nil }
+        if viewOffsetMs >= durationMs - 30_000 { return nil }
+        return min(1, Double(viewOffsetMs) / Double(durationMs))
+    }
 }
 
 nonisolated struct PlexSeasonSummary: Identifiable, Hashable, Sendable {
@@ -35,9 +77,9 @@ nonisolated struct PlexSeasonSummary: Identifiable, Hashable, Sendable {
     let parentRatingKey: String
     let showTitle: String
     let seasonNumber: Int
-    /// Display title, e.g. "Season 3"
     let title: String
     let thumbPath: String?
+    var libraryOrder: Int = 0
 
     var id: String { ratingKey }
 }
@@ -45,6 +87,7 @@ nonisolated struct PlexSeasonSummary: Identifiable, Hashable, Sendable {
 nonisolated struct PlexEpisodeSummary: Identifiable, Hashable, Sendable {
     let ratingKey: String
     let parentRatingKey: String
+    let showRatingKey: String?
     let showTitle: String
     let seasonNumber: Int
     let episodeNumber: Int
@@ -52,8 +95,17 @@ nonisolated struct PlexEpisodeSummary: Identifiable, Hashable, Sendable {
     let summary: String?
     let durationSeconds: Int?
     let thumbPath: String?
+    var showThumbPath: String?
+    var libraryOrder: Int = 0
+    var viewOffsetMs: Int?
+    var durationMs: Int?
+    var viewCount: Int?
 
     var id: String { ratingKey }
+
+    var watchProgressFraction: Double? {
+        PlexWatchProgress.fraction(viewOffsetMs: viewOffsetMs, durationMs: durationMs)
+    }
 }
 
 nonisolated struct PlexMusicTrackSummary: Identifiable, Hashable, Sendable {
@@ -62,6 +114,7 @@ nonisolated struct PlexMusicTrackSummary: Identifiable, Hashable, Sendable {
     let album: String?
     let artist: String?
     let thumbPath: String?
+    var libraryOrder: Int = 0
 
     var id: String { ratingKey }
 }
@@ -85,6 +138,16 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         }
     }
 
+    var libraryOrder: Int {
+        switch self {
+        case .movie(let m): return m.libraryOrder
+        case .show(let s): return s.libraryOrder
+        case .season(let s): return s.libraryOrder
+        case .episode(let e): return e.libraryOrder
+        case .musicTrack(let t): return t.libraryOrder
+        }
+    }
+
     var listTitle: String {
         switch self {
         case .movie(let m): return m.title
@@ -97,14 +160,10 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
 
     var listSubtitle: String? {
         switch self {
-        case .movie(let m):
-            return m.year.map { String($0) }
-        case .show(let s):
-            return s.year.map { String($0) } ?? "TV Show"
-        case .season(let s):
-            return "\(s.showTitle) · Season \(s.seasonNumber)"
-        case .episode(let e):
-            return "S\(e.seasonNumber) E\(e.episodeNumber)"
+        case .movie(let m): return m.year.map { String($0) }
+        case .show(let s): return s.year.map { String($0) } ?? "TV Show"
+        case .season(let s): return "\(s.showTitle) · Season \(s.seasonNumber)"
+        case .episode(let e): return "S\(e.seasonNumber) E\(e.episodeNumber)"
         case .musicTrack(let t):
             let parts = [t.artist, t.album].compactMap { $0 }
             return parts.isEmpty ? "Music" : parts.joined(separator: " · ")
@@ -121,7 +180,38 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// Plex `ratingKey` for `/library/metadata/{id}` playback, when this row is playable.
+    var listYear: Int? {
+        switch self {
+        case .movie(let m): return m.year
+        case .show(let s): return s.year
+        case .season, .episode, .musicTrack: return nil
+        }
+    }
+
+    var listAddedAt: Int? {
+        switch self {
+        case .movie(let m): return m.addedAt
+        case .show(let s): return s.addedAt
+        default: return nil
+        }
+    }
+
+    var listOriginallyAvailableAt: Int? {
+        switch self {
+        case .movie(let m): return m.originallyAvailableAt
+        case .show(let s): return s.originallyAvailableAt
+        default: return nil
+        }
+    }
+
+    var listSeasonEpisodeOrder: (season: Int, episode: Int)? {
+        switch self {
+        case .season(let s): return (s.seasonNumber, 0)
+        case .episode(let e): return (e.seasonNumber, e.episodeNumber)
+        default: return nil
+        }
+    }
+
     var playbackRatingKey: String? {
         switch self {
         case .movie(let m): return m.ratingKey
@@ -131,11 +221,18 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         }
     }
 
+    var watchProgressFraction: Double? {
+        switch self {
+        case .movie(let m): return m.watchProgressFraction
+        case .episode(let e): return e.watchProgressFraction
+        case .show, .season, .musicTrack: return nil
+        }
+    }
+
     var supportsVideoPlayback: Bool {
         playbackRatingKey != nil
     }
 
-    /// Case-insensitive match on `listTitle` and `listSubtitle` (for local / fixture search).
     func matchesSearch(trimmedQuery: String) -> Bool {
         let q = trimmedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return true }
@@ -146,7 +243,6 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
     }
 }
 
-/// One row in a server-wide catalog search (which `PlexLibrary` the item belongs to).
 nonisolated struct PlexCatalogSearchHit: Identifiable, Hashable, Sendable {
     let library: PlexLibrary
     let node: PlexCatalogNode
@@ -154,9 +250,89 @@ nonisolated struct PlexCatalogSearchHit: Identifiable, Hashable, Sendable {
     var id: String { "\(library.id)|\(node.id)" }
 }
 
-/// Which level of the catalog tree we are listing (fixtures + future API use the same idea).
 nonisolated enum PlexCatalogParent: Hashable, Sendable {
     case root
     case show(ratingKey: String)
     case season(ratingKey: String)
+    case collection(ratingKey: String)
+    case playlist(ratingKey: String)
+}
+
+nonisolated enum CatalogNavigationRoute: Hashable, Sendable {
+    case browse(library: PlexLibrary, parent: PlexCatalogParent, navigationTitle: String)
+    case showDetail(library: PlexLibrary, show: PlexShowSummary)
+    case media(library: PlexLibrary, node: PlexCatalogNode)
+    case serverPlaylists
+    case playlistItems(playlistKey: String, title: String)
+    case libraryCollections(library: PlexLibrary)
+    case collectionItems(collectionKey: String, title: String, library: PlexLibrary)
+}
+
+nonisolated struct CatalogPageResult: Sendable {
+    let nodes: [PlexCatalogNode]
+    let totalSize: Int?
+    let nextOffset: Int
+    var hasMore: Bool
+}
+
+nonisolated enum CatalogWatchFilter: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case unwatched
+    case watched
+
+    var id: String { rawValue }
+
+    var menuTitle: String {
+        switch self {
+        case .all: "All items"
+        case .unwatched: "Unwatched"
+        case .watched: "Watched"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .all: "All"
+        case .unwatched: "Unwatched"
+        case .watched: "Watched"
+        }
+    }
+
+    var plexQueryItems: [URLQueryItem] {
+        switch self {
+        case .all, .watched: return []
+        case .unwatched: return [URLQueryItem(name: "unwatched", value: "1")]
+        }
+    }
+
+    var filtersClientSideByViewCount: Bool {
+        self == .watched
+    }
+}
+
+nonisolated struct CatalogListFilters: Hashable, Sendable {
+    var genreFilterKey: String?
+    var year: Int?
+
+    var isActive: Bool {
+        genreFilterKey != nil || year != nil
+    }
+
+    var plexQueryItems: [URLQueryItem] {
+        var items: [URLQueryItem] = []
+        if let genreFilterKey, !genreFilterKey.isEmpty {
+            items.append(URLQueryItem(name: "genre", value: genreFilterKey))
+        }
+        if let year {
+            items.append(URLQueryItem(name: "year", value: String(year)))
+        }
+        return items
+    }
+}
+
+nonisolated struct PlexLibraryGenre: Identifiable, Hashable, Sendable {
+    let filterKey: String
+    let title: String
+
+    var id: String { filterKey }
 }

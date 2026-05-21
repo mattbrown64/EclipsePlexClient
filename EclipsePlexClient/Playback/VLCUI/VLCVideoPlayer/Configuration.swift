@@ -26,6 +26,8 @@ public extension VLCVideoPlayer {
         public var subtitleColor: ValueSelector<_PlatformColor>
         public var playbackChildren: [PlaybackChild]
         public var options: [String: Any]
+        /// Plex token / client headers for remote streams (`:http-extra-headers` on `VLCMedia`).
+        public var httpHeaderFields: [String: String]
 
         @available(macOS, deprecated: 13.0, message: "Use init with `startSeconds` instead")
         @_disfavoredOverload
@@ -42,7 +44,8 @@ public extension VLCVideoPlayer {
             subtitleFont: ValueSelector<_PlatformFont> = .auto,
             subtitleColor: ValueSelector<_PlatformColor> = .auto,
             playbackChildren: [PlaybackChild] = [],
-            options: [String: Any] = [:]
+            options: [String: Any] = [:],
+            httpHeaderFields: [String: String] = [:]
         ) {
             self.url = url
             self.autoPlay = autoPlay
@@ -57,6 +60,7 @@ public extension VLCVideoPlayer {
             self.subtitleColor = subtitleColor
             self.playbackChildren = playbackChildren
             self.options = options
+            self.httpHeaderFields = httpHeaderFields
         }
 
         @available(iOS 16.0, macOS 13.0, tvOS 16.0, *)
@@ -73,7 +77,8 @@ public extension VLCVideoPlayer {
             subtitleFont: ValueSelector<_PlatformFont> = .auto,
             subtitleColor: ValueSelector<_PlatformColor> = .auto,
             playbackChildren: [PlaybackChild] = [],
-            options: [String: Any] = [:]
+            options: [String: Any] = [:],
+            httpHeaderFields: [String: String] = [:]
         ) {
             self.url = url
             self.autoPlay = autoPlay
@@ -88,6 +93,7 @@ public extension VLCVideoPlayer {
             self.subtitleColor = subtitleColor
             self.playbackChildren = playbackChildren
             self.options = options
+            self.httpHeaderFields = httpHeaderFields
         }
 
         @available(iOS 16.0, macOS 13.0, tvOS 16.0, *)

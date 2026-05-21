@@ -14,6 +14,8 @@ final class PlexServerRegistry: ObservableObject {
     @Published var librariesLoadError: String?
     @Published var librariesLoadErrorServerID: UUID?
     @Published private(set) var librariesLoadingServerID: UUID?
+    /// Last reachability probe per server (`nil` = unknown).
+    @Published private(set) var serverReachable: [UUID: Bool] = [:]
 
     /// Plex.tv account token (PIN sign-in). Used only to refresh the server list, not for PMS calls.
     @Published private(set) var plexAccountAuthToken: String?
@@ -43,6 +45,12 @@ final class PlexServerRegistry: ObservableObject {
 
     func isUserAddedServer(id: UUID) -> Bool {
         customServers.contains { $0.id == id }
+    }
+
+    func updateCustomServer(_ server: PlexServer) {
+        guard let idx = customServers.firstIndex(where: { $0.id == server.id }) else { return }
+        customServers[idx] = server
+        saveToDisk()
     }
 
     func addCustomServer(_ server: PlexServer) {
@@ -98,6 +106,8 @@ final class PlexServerRegistry: ObservableObject {
                 }
             }
             librariesByServerID[server.id] = nil
+            librariesLoadError = firstError.localizedDescription
+            librariesLoadErrorServerID = server.id
             librariesLoadError = firstError.localizedDescription
             librariesLoadErrorServerID = server.id
         }

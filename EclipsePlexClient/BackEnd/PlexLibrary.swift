@@ -53,9 +53,37 @@ nonisolated struct PlexLibrary: Identifiable, Hashable, Sendable, Codable {
     let agent: String?
     let scanner: String?
     let language: String?
+    /// Plex library default sort (`titleSort`, `addedAt:desc`, etc.) from section `sort`.
+    let plexDefaultSortKey: String?
 
     var sectionType: PlexSectionType {
         PlexSectionType(plexCode: type)
+    }
+
+    /// Numeric section id for API paths (e.g. `1`), even when Plex `key` is `/library/sections/1`.
+    var sectionID: String {
+        Self.normalizeSectionKey(sectionKey)
+    }
+
+    /// `true` when `sectionID` matches a metadata `librarySectionID` from Plex.
+    func matchesLibrarySectionID(_ sectionID: String?) -> Bool {
+        guard let sectionID, !sectionID.isEmpty else { return false }
+        return Self.normalizeSectionKey(sectionID) == self.sectionID
+    }
+
+    /// Strips `/library/sections/` prefixes so paths use a single numeric id.
+    static func normalizeSectionKey(_ key: String) -> String {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = trimmed.range(of: "/library/sections/") {
+            let suffix = trimmed[range.upperBound...]
+            if let first = suffix.split(separator: "/").first {
+                return String(first)
+            }
+        }
+        if trimmed.hasPrefix("/") {
+            return String(trimmed.dropFirst())
+        }
+        return trimmed
     }
 
     var id: String {
@@ -77,6 +105,7 @@ nonisolated struct PlexLibrary: Identifiable, Hashable, Sendable, Codable {
         case scanner
         case language
         case serverId
+        case plexDefaultSortKey = "sort"
     }
 
     init(
@@ -89,7 +118,8 @@ nonisolated struct PlexLibrary: Identifiable, Hashable, Sendable, Codable {
         uuid: String? = nil,
         agent: String? = nil,
         scanner: String? = nil,
-        language: String? = nil
+        language: String? = nil,
+        plexDefaultSortKey: String? = nil
     ) {
         self.serverId = serverId
         self.sectionKey = sectionKey
@@ -101,6 +131,7 @@ nonisolated struct PlexLibrary: Identifiable, Hashable, Sendable, Codable {
         self.agent = agent
         self.scanner = scanner
         self.language = language
+        self.plexDefaultSortKey = plexDefaultSortKey
     }
 
     init(from decoder: Decoder) throws {
@@ -127,6 +158,7 @@ nonisolated struct PlexLibrary: Identifiable, Hashable, Sendable, Codable {
         agent = try c.decodeIfPresent(String.self, forKey: .agent)
         scanner = try c.decodeIfPresent(String.self, forKey: .scanner)
         language = try c.decodeIfPresent(String.self, forKey: .language)
+        plexDefaultSortKey = try c.decodeIfPresent(String.self, forKey: .plexDefaultSortKey)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -141,6 +173,7 @@ nonisolated struct PlexLibrary: Identifiable, Hashable, Sendable, Codable {
         try c.encodeIfPresent(agent, forKey: .agent)
         try c.encodeIfPresent(scanner, forKey: .scanner)
         try c.encodeIfPresent(language, forKey: .language)
+        try c.encodeIfPresent(plexDefaultSortKey, forKey: .plexDefaultSortKey)
     }
 
     func withServerId(_ id: UUID) -> PlexLibrary {

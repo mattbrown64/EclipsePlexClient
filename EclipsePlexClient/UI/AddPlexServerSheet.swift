@@ -33,6 +33,7 @@ struct AddPlexServerSheet: View {
     @State private var isSigningIn = false
     @State private var isLoadingAccountServers = false
     @State private var signInTask: Task<Void, Never>?
+    @State private var showSignOutConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -70,6 +71,15 @@ struct AddPlexServerSheet: View {
             .onDisappear {
                 signInTask?.cancel()
             }
+            .confirmDestructive(
+                title: "Sign out of Plex.tv?",
+                message: "This clears your Plex.tv token used for PIN sign-in. Saved servers on this device are not removed.",
+                confirmLabel: "Sign Out",
+                isPresented: $showSignOutConfirm
+            ) {
+                registry.setPlexAccountToken(nil)
+                accountServers = []
+            }
             .task(id: "\(mode)|\(registry.plexAccountAuthToken ?? "")") {
                 guard mode == .account else { return }
                 guard let t = registry.plexAccountAuthToken, !t.isEmpty else {
@@ -100,8 +110,7 @@ struct AddPlexServerSheet: View {
                     .disabled(isLoadingAccountServers || isSigningIn)
                     Spacer()
                     Button("Sign out") {
-                        registry.setPlexAccountToken(nil)
-                        accountServers = []
+                        showSignOutConfirm = true
                     }
                     .disabled(isSigningIn)
                 }

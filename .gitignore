@@ -2,7 +2,7 @@
 Pods/
 *.xcworkspace/xcuserdata/
 
-# Optional: omit large macOS binary (run Scripts/fetch-vlckit-macos.sh)
+# Optional: omit large macOS binary (run scripts/fetch-vlckit-macos.sh)
 # Frameworks/VLCKit.xcframework/
 
 # Xcode user data
@@ -11,3 +11,7 @@ Pods/
 
 # macOS
 .DS_Store
+
+# Local test videos (not bundled in the app)
+EclipsePlexClient/*.mp4
+EclipsePlexClient/*.mkv

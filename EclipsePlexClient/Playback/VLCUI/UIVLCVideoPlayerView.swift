@@ -10,7 +10,7 @@ import UIKit
 import VLCKit
 #elseif os(tvOS)
 import TVVLCKit
-#else
+#elseif canImport(MobileVLCKit)
 import MobileVLCKit
 #endif
 
@@ -93,6 +93,11 @@ public class UIVLCVideoPlayerView: _PlatformView {
 
         let media = VLCMedia(url: newConfiguration.url)
         media.addOptions(newConfiguration.options)
+        VLCNetworkMediaOptions.apply(
+            to: media,
+            url: newConfiguration.url,
+            headerFields: newConfiguration.httpHeaderFields
+        )
 
         #if os(macOS)
         let newMediaPlayer = VLCMediaPlayer(videoView: videoContentView)
@@ -126,6 +131,14 @@ public class UIVLCVideoPlayerView: _PlatformView {
                 self?.startPlaybackIfNeeded()
             }
         }
+    }
+
+    /// Current playback position for resume / scrobble reporting.
+    func playbackPositionSnapshot() -> (positionMs: Int, durationMs: Int) {
+        guard let player = currentMediaPlayer, let media = player.media else {
+            return (0, 0)
+        }
+        return (Int(player.time.intValue), Int(media.length.intValue))
     }
 
     func setAspectFill(with percentage: Float) {

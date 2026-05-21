@@ -89,6 +89,10 @@ nonisolated enum PlexSampleData {
             return seasonNodes(for: library, showRatingKey: showKey)
         case .season(let seasonKey):
             return episodeNodes(for: library, seasonRatingKey: seasonKey)
+        case .collection, .playlist:
+            return []
+        case .collection, .playlist:
+            return []
         }
     }
 
@@ -212,6 +216,7 @@ nonisolated enum PlexSampleData {
             .episode(PlexEpisodeSummary(
                 ratingKey: "\(base):ep-1",
                 parentRatingKey: seasonRatingKey,
+                showRatingKey: showKey,
                 showTitle: showTitle,
                 seasonNumber: seasonNumber,
                 episodeNumber: 1,
@@ -223,6 +228,7 @@ nonisolated enum PlexSampleData {
             .episode(PlexEpisodeSummary(
                 ratingKey: "\(base):ep-2",
                 parentRatingKey: seasonRatingKey,
+                showRatingKey: showKey,
                 showTitle: showTitle,
                 seasonNumber: seasonNumber,
                 episodeNumber: 2,
