@@ -89,6 +89,7 @@ public class UIVLCVideoPlayerView: _PlatformView {
 
     func setupVLCMediaPlayer(with newConfiguration: VLCVideoPlayer.Configuration) {
         currentMediaPlayer?.stop()
+        currentMediaPlayer?.delegate = nil
         currentMediaPlayer = nil
 
         let media = VLCMedia(url: newConfiguration.url)
@@ -183,6 +184,15 @@ public class UIVLCVideoPlayerView: _PlatformView {
         }
     }
 
+    /// Stops VLC and clears delegates so tick callbacks cannot fire after
+    /// SwiftUI dismantles the representable.
+    func teardownPlayback() {
+        currentMediaPlayer?.stop()
+        currentMediaPlayer?.delegate = nil
+        currentMediaPlayer = nil
+        proxy?.mediaPlayer = nil
+    }
+
     #if os(macOS)
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -209,18 +219,18 @@ extension UIVLCVideoPlayerView {
 
     private func constructPlaybackInformation(player: VLCMediaPlayer, media: VLCMedia) -> VLCVideoPlayer.PlaybackInformation {
 
-        let subtitleIndexes = player.videoSubTitlesIndexes as! [Int]
-        let subtitleNames = player.videoSubTitlesNames as! [String]
+        let subtitleIndexes = Self.intTrackIndexes(from: player.videoSubTitlesIndexes)
+        let subtitleNames = Self.stringTrackNames(from: player.videoSubTitlesNames)
 
-        let audioIndexes = player.audioTrackIndexes as! [Int]
-        let audioNames = player.audioTrackNames as! [String]
+        let audioIndexes = Self.intTrackIndexes(from: player.audioTrackIndexes)
+        let audioNames = Self.stringTrackNames(from: player.audioTrackNames)
 
-        let videoIndexes = player.videoTrackIndexes as! [Int]
-        let videoNames = player.videoTrackNames as? [String]
+        let videoIndexes = Self.intTrackIndexes(from: player.videoTrackIndexes)
+        let videoNames = Self.stringTrackNames(from: player.videoTrackNames)
 
         let subtitleTracks = zip(subtitleIndexes, subtitleNames).map { MediaTrack(index: $0, title: $1) }
         let audioTracks = zip(audioIndexes, audioNames).map { MediaTrack(index: $0, title: $1) }
-        let videoTracks = zip(videoIndexes, videoNames ?? []).map { MediaTrack(index: $0, title: $1) }
+        let videoTracks = zip(videoIndexes, videoNames).map { MediaTrack(index: $0, title: $1) }
 
         let currentSubtitleTrack: MediaTrack = subtitleTracks
             .first(where: { $0.index == player.currentVideoSubTitleIndex.asInt })
@@ -247,6 +257,22 @@ extension UIVLCVideoPlayerView {
             videoTracks: videoTracks,
             statistics: .init(stats: media.statistics)
         )
+    }
+}
+
+private extension UIVLCVideoPlayerView {
+    static func intTrackIndexes(from value: Any?) -> [Int] {
+        guard let array = value as? [Any] else { return [] }
+        return array.compactMap { element in
+            if let number = element as? NSNumber { return number.intValue }
+            if let index = element as? Int { return index }
+            return nil
+        }
+    }
+
+    static func stringTrackNames(from value: Any?) -> [String] {
+        guard let array = value as? [Any] else { return [] }
+        return array.compactMap { $0 as? String }
     }
 }
 

@@ -14,6 +14,8 @@ struct DownloadControls: View {
 
     @Environment(\.offlineDownloads) private var downloadManager
     @Environment(\.dismissBrowseMenu) private var dismissBrowseMenu
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    @EnvironmentObject private var plexRegistry: PlexServerRegistry
 
     @State private var isEnqueueing = false
     @State private var batchError: String?
@@ -25,7 +27,14 @@ struct DownloadControls: View {
         if let downloadManager {
             downloadBody(downloadManager)
 #if os(iOS)
-                .eclipsePlexFullscreenPlayback(item: $fullscreenPlayback)
+                .eclipsePlexFullscreenPlayback(
+                    item: $fullscreenPlayback,
+                    dependencies: PlaybackCoverDependencies(
+                        downloadManager: downloadManager,
+                        focusCoordinator: focusCoordinator,
+                        plexRegistry: plexRegistry
+                    )
+                )
 #endif
         }
     }

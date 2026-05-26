@@ -14,6 +14,27 @@ struct ContentView: View {
     @State private var loadError: String?
     @State private var loadingMessage = "Preparing playback…"
 
+    init(request: PlaybackRequest? = nil) {
+        self.request = request
+        _activeRequest = State(initialValue: request)
+    }
+
+    private var playbackLoadTaskKey: String {
+        guard let req = activeRequest ?? request else { return "none" }
+        switch req {
+        case .plex(let server, let ratingKey, _, _):
+            return "plex|\(server.id.uuidString)|\(ratingKey)"
+        case .downloadedPlexItem(let server, let ratingKey, _):
+            return "offline|\(server.id.uuidString)|\(ratingKey)"
+        case .remoteStream(let url):
+            return "stream|\(url.absoluteString)"
+        case .localFile(let url):
+            return "file|\(url.absoluteString)"
+        case .bundledDemo:
+            return "bundledDemo"
+        }
+    }
+
     var body: some View {
         Group {
             if resolvedPlayback != nil {
@@ -30,7 +51,6 @@ struct ContentView: View {
                         activeRequest = next
                         resolvedPlayback = nil
                         playerChromeShowTitle = nil
-                        Task { await resolvePlaybackURL() }
                     }
                 )
             } else if let loadError {
@@ -39,15 +59,16 @@ struct ContentView: View {
                 ProgressView(loadingMessage)
             }
         }
+        .accessibilityIdentifier("playbackShell")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
         .navigationBarBackButtonHidden(true)
         .onAppear {
-            if activeRequest == nil {
-                activeRequest = request
-            }
             focusCoordinator.browseKeyboardCommandsEnabled = false
-            focusCoordinator.route = .player
+            // Defer so `.task` and focus routing don't fight in the same frame.
+            DispatchQueue.main.async {
+                focusCoordinator.route = .player
+            }
         }
         .onDisappear {
             focusCoordinator.browseKeyboardCommandsEnabled = true
@@ -58,7 +79,8 @@ struct ContentView: View {
         .persistentSystemOverlays(playerChrome.isVisible ? .automatic : .hidden)
         .ignoresSafeArea(.container, edges: .vertical)
 #endif
-        .task(id: activeRequest) {
+        .task(id: playbackLoadTaskKey) {
+            guard playbackLoadTaskKey != "none" else { return }
             PlaybackScrobbleReporter.resetSession()
             await resolvePlaybackURL()
         }
@@ -88,7 +110,6 @@ struct ContentView: View {
     @MainActor
     private func resolvePlaybackURL() async {
         loadError = nil
-        resolvedPlayback = nil
 
         let req = self.activeRequest ?? request ?? .bundledDemo
 
@@ -109,11 +130,16 @@ struct ContentView: View {
             if case .plex = req {
                 loadingMessage = "Reading Plex metadata…"
             }
-            resolvedPlayback = try await ContentViewPlaybackLoader.resolvePlayback(
+            let resolved = try await ContentViewPlaybackLoader.resolvePlayback(
                 request: req,
                 downloadManager: downloadManager
             )
+            guard !Task.isCancelled else { return }
+            resolvedPlayback = resolved
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             AppLog.playback("ContentView playback failed: \(error.localizedDescription)")
             loadError = PlaybackErrorMessages.friendly(error.localizedDescription)
         }
@@ -200,16 +226,23 @@ private struct VideoPlaybackView: View {
             }
         }
         .task(id: playNextTaskKey) {
+            // Let VLC attach before competing Plex metadata fetches.
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
             await refreshAdjacentEpisodeCandidates()
+            guard !Task.isCancelled else { return }
             await loadPlaybackPresentationInfo()
         }
         .onChange(of: playback.playbackMarkers) { _, markers in
             guard !markers.isEmpty else { return }
-            playbackMarkers = PlexPlaybackMarkerParser.merged(
+            let duration = currentDurationMs()
+            let merged = PlexPlaybackMarkerParser.merged(
                 xml: markers,
                 json: playbackMarkers,
-                durationMs: currentDurationMs() > 0 ? currentDurationMs() : nil
+                durationMs: duration > 0 ? duration : nil
             )
+            guard merged != playbackMarkers else { return }
+            playbackMarkers = merged
         }
         .onAppear {
             if !playback.playbackMarkers.isEmpty {
@@ -232,7 +265,18 @@ private struct VideoPlaybackView: View {
         .onDisappear {
             chrome.tearDown()
             PlaybackScrobbleReporter.stopPeriodicReporting()
-            Task { await reportWatchStateToPlex() }
+            guard !didReportWatchState else { return }
+            didReportWatchState = true
+            let req = request
+            let position = currentPositionMs()
+            let duration = currentDurationMs()
+            Task {
+                await PlaybackScrobbleReporter.reportSessionEnd(
+                    request: req,
+                    positionMs: position,
+                    durationMs: duration
+                )
+            }
         }
         .onChange(of: blocksAutoHide) { _, blocks in
             chrome.setPinned(blocks)
@@ -599,11 +643,13 @@ private struct VideoPlaybackView: View {
               let client = try? PlexMediaServerClient(server: server),
               let detail = try? await client.fetchMediaDetail(ratingKey: ratingKey)
         else {
+            guard !Task.isCancelled else { return }
             playbackMarkers = playback.playbackMarkers
             windowTitle = fallbackTitle
             chromeEpisodeLine = nil
             return
         }
+        guard !Task.isCancelled else { return }
         playbackMarkers = PlexPlaybackMarkerParser.merged(
             xml: playback.playbackMarkers,
             json: detail.markers,
@@ -615,6 +661,7 @@ private struct VideoPlaybackView: View {
             episodeContext: episodeContext,
             fallback: fallbackTitle
         )
+        guard !Task.isCancelled else { return }
         windowTitle = labels.showTitle
         chromeEpisodeLine = labels.episodeLine
     }
@@ -685,6 +732,7 @@ private struct VideoPlaybackView: View {
             episodeRatingKey: ratingKey,
             explicit: explicitContext
         ) else { return }
+        guard !Task.isCancelled else { return }
 
         do {
             let client = try PlexMediaServerClient(server: server)
@@ -698,9 +746,14 @@ private struct VideoPlaybackView: View {
                 showRatingKey: context.showRatingKey,
                 episodeRatingKey: ratingKey
             )
-            nextEpisodeCandidate = try await next
-            previousEpisodeCandidate = try await previous
+            let nextEpisode = try await next
+            let previousEpisode = try await previous
+            guard !Task.isCancelled else { return }
+            nextEpisodeCandidate = nextEpisode
+            previousEpisodeCandidate = previousEpisode
             nextEpisodeContext = context
+        } catch is CancellationError {
+            return
         } catch {
             AppLog.playback("Adjacent episode prefetch failed: \(error.localizedDescription)")
         }

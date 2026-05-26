@@ -17,6 +17,7 @@ struct RootShellView: View {
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
     @EnvironmentObject private var bootstrapController: AppBootstrapController
+    @EnvironmentObject private var playbackPresenter: PlaybackPresenter
 
     @State private var showAddPlexServer = false
     @State private var showSettings = false
@@ -106,6 +107,14 @@ struct RootShellView: View {
     var body: some View {
         rootShell
             .environmentObject(plexRegistry)
+            .attachPlaybackPresenter(
+                playbackPresenter,
+                dependencies: PlaybackCoverDependencies(
+                    downloadManager: downloadManager,
+                    focusCoordinator: focusCoordinator,
+                    plexRegistry: plexRegistry
+                )
+            )
             .task {
                 await bootstrapController.markReady(minimumDuration: 0.25)
             }

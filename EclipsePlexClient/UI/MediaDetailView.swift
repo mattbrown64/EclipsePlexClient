@@ -145,7 +145,9 @@ struct MediaDetailView: View {
             await loadDetail()
         }
         .onAppear {
-            focusCoordinator.route = .detailActions
+            DispatchQueue.main.async {
+                focusCoordinator.route = .detailActions
+            }
         }
         .onKeyPress(keys: [.init("w")]) { _ in
             startKeyboardWatch(resume: false)
@@ -483,28 +485,32 @@ struct MediaDetailView: View {
         defer { isLoadingDetail = false }
         do {
             let client = try PlexMediaServerClient(server: plexServer)
-            // Extras + related shelves don't depend on `detail`; fan them out so
-            // the detail screen first-paint waits on the slowest one, not the sum.
-            async let detailLoad = client.fetchMediaDetail(ratingKey: ratingKey)
-            async let extrasLoad: [PlexExtraItem] = {
-                (try? await client.fetchExtras(ratingKey: ratingKey)) ?? []
-            }()
-            async let relatedLoad: [PlexHubShelf] = {
-                (try? await client.fetchRelatedHubShelves(ratingKey: ratingKey, library: library)) ?? []
-            }()
-            let fetchedDetail = try await detailLoad
-            let fetchedExtras = await extrasLoad
-            let fetchedRelated = await relatedLoad
-            guard !Task.isCancelled else { return }
+            // Load sequentially so a cancelled task (or opening playback) does
+            // not leave parallel URLSession + ImageIO work writing into a
+            // dismantled view — the source of the malloc abort here.
+            let fetchedDetail = try await client.fetchMediaDetail(ratingKey: ratingKey)
+            guard shouldApplyDetailLoadResults() else { return }
             detail = fetchedDetail
+
+            let fetchedExtras = (try? await client.fetchExtras(ratingKey: ratingKey)) ?? []
+            guard shouldApplyDetailLoadResults() else { return }
             extras = fetchedExtras
+
+            let fetchedRelated = (
+                try? await client.fetchRelatedHubShelves(ratingKey: ratingKey, library: library)
+            ) ?? []
+            guard shouldApplyDetailLoadResults() else { return }
             relatedShelves = fetchedRelated
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled else { return }
+            guard shouldApplyDetailLoadResults() else { return }
             detailError = error.localizedDescription
         }
+    }
+
+    private func shouldApplyDetailLoadResults() -> Bool {
+        !Task.isCancelled && playbackPresenter.activeRequest == nil
     }
 
     @MainActor

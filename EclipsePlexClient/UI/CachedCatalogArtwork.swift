@@ -18,6 +18,7 @@ struct CachedCatalogArtwork: View {
     let size: CGSize
     let cornerRadius: CGFloat
 
+    @EnvironmentObject private var playbackPresenter: PlaybackPresenter
     @State private var loadedImage: PlexCachedImage?
     #if os(iOS) || os(tvOS)
     @Environment(\.displayScale) private var displayScale
@@ -42,6 +43,7 @@ struct CachedCatalogArtwork: View {
         .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: url) {
+            guard playbackPresenter.activeRequest == nil else { return }
             await load()
         }
     }
@@ -70,13 +72,15 @@ struct CachedCatalogArtwork: View {
     }
 
     private func load() async {
+        guard playbackPresenter.activeRequest == nil else { return }
         let maxPixel = maxPixelSize
         if let cached = PlexArtworkCache.memoryImage(for: url, maxPixelSize: maxPixel) {
+            guard playbackPresenter.activeRequest == nil else { return }
             loadedImage = cached
             return
         }
         let image = await PlexArtworkCache.loadDownsampledImage(url: url, maxPixelSize: maxPixel)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, playbackPresenter.activeRequest == nil else { return }
         loadedImage = image
     }
 }

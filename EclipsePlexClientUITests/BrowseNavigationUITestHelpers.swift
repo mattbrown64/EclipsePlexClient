@@ -69,6 +69,69 @@ enum BrowseNavigationUITestHelpers {
             .waitForExistence(timeout: timeout)
     }
 
+    /// Opens the first fixture movie detail (iOS tap or macOS Return).
+    @discardableResult
+    static func openSampleMovieDetail(_ app: XCUIApplication, timeout: TimeInterval = 10) -> Bool {
+        guard selectSampleMoviesLibrary(app), waitForSampleCatalog(app, timeout: timeout) else {
+            return false
+        }
+
+        let movie = app.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", sampleMovieTitlePrefix))
+            .firstMatch
+        guard movie.waitForExistence(timeout: timeout) else { return false }
+
+#if os(macOS)
+        movie.click()
+        app.typeKey(.return, modifierFlags: [])
+#else
+        movie.tap()
+#endif
+
+        // Fixture servers have no token, so Watch may be absent; the detail
+        // screen still exercises MediaDetailView.task / loadDetail.
+        if app.buttons["watchButton"].waitForExistence(timeout: 4) {
+            return true
+        }
+        return movie.waitForExistence(timeout: timeout)
+    }
+
+    /// Sample data + optional live Plex credentials from the UI-test scheme environment.
+    static func launchLivePlexApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-UITestSeedSampleData",
+            "-UITestSkipOnboarding",
+            "-UITestShowSidebar",
+            "-UITestLivePlex",
+        ]
+        app.launch()
+        app.activate()
+        return app
+    }
+
+    static var hasLivePlexUITestCredentials: Bool {
+        let env = ProcessInfo.processInfo.environment
+        let token = env["UITEST_PLEX_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let base = env["UITEST_PLEX_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !token.isEmpty && !base.isEmpty
+    }
+
+    /// Opens the first row in the movies catalog (for live Plex UI tests).
+    @discardableResult
+    static func openFirstCatalogItemDetail(_ app: XCUIApplication, timeout: TimeInterval = 15) -> Bool {
+        guard selectSampleMoviesLibrary(app) else { return false }
+        let firstCell = app.cells.firstMatch
+        guard firstCell.waitForExistence(timeout: timeout) else { return false }
+        firstCell.tap()
+        return app.buttons["watchButton"].waitForExistence(timeout: timeout)
+    }
+
+    static func waitForPlaybackShell(_ app: XCUIApplication, timeout: TimeInterval = 20) -> Bool {
+        app.otherElements["playbackShell"].waitForExistence(timeout: timeout)
+            || app.descendants(matching: .any)["playbackShell"].waitForExistence(timeout: timeout)
+    }
+
     private static func sidebarIsVisible(_ app: XCUIApplication) -> Bool {
         let markers = ["aggregate-home", "server-home", "settings", "plex-\(sampleHomeServerID)"]
         if markers.contains(where: { app.descendants(matching: .any)[$0].exists }) {

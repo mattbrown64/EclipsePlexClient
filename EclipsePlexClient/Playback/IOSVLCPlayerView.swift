@@ -46,7 +46,9 @@ struct IOSVLCPlayerView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: UIVLCVideoPlayerView, coordinator: Coordinator) {
+        coordinator.deactivate()
         coordinator.persistPositionIfNeeded()
+        uiView.teardownPlayback()
     }
 
     final class Coordinator {
@@ -59,6 +61,7 @@ struct IOSVLCPlayerView: UIViewRepresentable {
         private let onNaturalEnd: () -> Void
 
         weak var playerView: UIVLCVideoPlayerView?
+        private var isActive = true
         private var didNotifyNaturalEnd = false
         private var lastPositionMs = 0
         private var lastDurationMs = 0
@@ -90,6 +93,11 @@ struct IOSVLCPlayerView: UIViewRepresentable {
             self.onNaturalEnd = onNaturalEnd
         }
 
+        func deactivate() {
+            isActive = false
+            playerView = nil
+        }
+
         func currentConfiguration() -> VLCVideoPlayer.Configuration {
             playback.vlcConfiguration(candidateIndex: candidateIndex)
         }
@@ -110,33 +118,37 @@ struct IOSVLCPlayerView: UIViewRepresentable {
         }
 
         func handleTicks(_ ticks: Int, info: VLCVideoPlayer.PlaybackInformation) {
-            lastPositionMs = ticks
-            lastDurationMs = info.length
-            onPositionUpdate(ticks, info.length)
-            publishInfoIfChanged(info)
-            persistPositionPeriodically(positionMs: ticks, durationMs: info.length)
+            publishOnMain {
+                self.lastPositionMs = ticks
+                self.lastDurationMs = info.length
+                self.onPositionUpdate(ticks, info.length)
+                self.publishInfoIfChanged(info)
+                self.persistPositionPeriodically(positionMs: ticks, durationMs: info.length)
+            }
         }
 
         func handleState(_ state: VLCVideoPlayer.State, info: VLCVideoPlayer.PlaybackInformation) {
-            publishInfoIfChanged(info, force: true)
-            onPlayerStateChange(state)
-            statusText.wrappedValue = state.label
-            switch state {
-            case .playing:
-                errorMessage.wrappedValue = nil
-                if !didApplyPreferredSubtitle {
-                    didApplyPreferredSubtitle = true
-                    applyPreferredSubtitleIfNeeded()
+            publishOnMain {
+                self.publishInfoIfChanged(info, force: true)
+                self.onPlayerStateChange(state)
+                self.statusText.wrappedValue = state.label
+                switch state {
+                case .playing:
+                    self.errorMessage.wrappedValue = nil
+                    if !self.didApplyPreferredSubtitle {
+                        self.didApplyPreferredSubtitle = true
+                        self.applyPreferredSubtitleIfNeeded()
+                    }
+                case .error:
+                    self.handlePlaybackFailure(on: self.playerView)
+                case .ended:
+                    if let ctx = self.playback.resumeContext {
+                        PlaybackPositionStore.clear(serverId: ctx.serverId, ratingKey: ctx.ratingKey)
+                    }
+                    self.onNaturalEnd()
+                default:
+                    break
                 }
-            case .error:
-                handlePlaybackFailure(on: playerView)
-            case .ended:
-                if let ctx = playback.resumeContext {
-                    PlaybackPositionStore.clear(serverId: ctx.serverId, ratingKey: ctx.ratingKey)
-                }
-                onNaturalEnd()
-            default:
-                break
             }
         }
 
@@ -168,12 +180,15 @@ struct IOSVLCPlayerView: UIViewRepresentable {
         }
 
         private func startCandidate(on view: UIVLCVideoPlayerView) {
-            guard candidateIndex < playback.candidates.count else { return }
+            guard isActive, candidateIndex < playback.candidates.count else { return }
             didNotifyNaturalEnd = false
             let candidate = playback.candidates[candidateIndex]
             activeStreamSignature = playback.streamSignature
-            statusText.wrappedValue = "Opening \(candidate.label)…"
-            errorMessage.wrappedValue = nil
+            publishOnMain {
+                guard self.isActive else { return }
+                self.statusText.wrappedValue = "Opening \(candidate.label)…"
+                self.errorMessage.wrappedValue = nil
+            }
             view.setupVLCMediaPlayer(with: playback.vlcConfiguration(candidateIndex: candidateIndex))
         }
 
@@ -213,6 +228,15 @@ struct IOSVLCPlayerView: UIViewRepresentable {
             if !force, fingerprint == lastPublishedInfoFingerprint { return }
             lastPublishedInfoFingerprint = fingerprint
             onPlaybackInfoUpdate(info)
+        }
+
+        /// VLC delegate callbacks arrive off the main thread; SwiftUI state
+        /// must only be touched on the main actor while the view is mounted.
+        private func publishOnMain(_ block: @escaping () -> Void) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isActive else { return }
+                block()
+            }
         }
 
         private func infoFingerprint(_ info: VLCVideoPlayer.PlaybackInformation) -> String {

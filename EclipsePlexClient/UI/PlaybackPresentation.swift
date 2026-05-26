@@ -25,13 +25,25 @@ struct PlaybackPresentationItem: Identifiable, Hashable {
     }
 }
 
+/// Objects `ContentView` needs inside a sheet / full-screen cover.
+/// Passed explicitly because those presentations do not inherit the full
+/// environment tree from `RootShellView`.
+struct PlaybackCoverDependencies {
+    let downloadManager: OfflineDownloadManager
+    let focusCoordinator: KeyboardFocusCoordinator
+    let plexRegistry: PlexServerRegistry
+}
+
 extension View {
     /// Presents `ContentView` edge-to-edge on iPhone / iPad (avoids navigation bar layout).
     @ViewBuilder
-    func eclipsePlexFullscreenPlayback(item: Binding<PlaybackPresentationItem?>) -> some View {
+    func eclipsePlexFullscreenPlayback(
+        item: Binding<PlaybackPresentationItem?>,
+        dependencies: PlaybackCoverDependencies
+    ) -> some View {
 #if os(iOS)
         fullScreenCover(item: item) { presented in
-            PlaybackCoverHost(request: presented.request)
+            PlaybackCoverHost(request: presented.request, dependencies: dependencies)
         }
 #else
         self
@@ -39,17 +51,15 @@ extension View {
     }
 }
 
-#if os(iOS) || os(tvOS)
-/// Forwards environment objects into the playback full-screen cover.
+/// Hosts `ContentView` in a platform presentation with required dependencies wired in.
 struct PlaybackCoverHost: View {
     let request: PlaybackRequest
-    @EnvironmentObject private var downloadManager: OfflineDownloadManager
-    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    let dependencies: PlaybackCoverDependencies
 
     var body: some View {
         ContentView(request: request)
-            .offlineDownloads(downloadManager)
-            .environmentObject(focusCoordinator)
+            .offlineDownloads(dependencies.downloadManager)
+            .environmentObject(dependencies.focusCoordinator)
+            .environmentObject(dependencies.plexRegistry)
     }
 }
-#endif

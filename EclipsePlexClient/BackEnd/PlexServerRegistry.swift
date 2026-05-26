@@ -105,6 +105,30 @@ final class PlexServerRegistry: ObservableObject {
             addCustomServer(server)
             librariesByServerID[server.id] = PlexSampleData.libraries(for: server.id)
         }
+        applyUITestLivePlexCredentialsIfPresent()
+    }
+
+    /// When UI tests pass `-UITestLivePlex`, patch the sample Home server with
+    /// credentials from the scheme environment (for on-device playback tests).
+    private func applyUITestLivePlexCredentialsIfPresent() {
+        guard ProcessInfo.processInfo.arguments.contains("-UITestLivePlex") else { return }
+        let env = ProcessInfo.processInfo.environment
+        guard let token = env["UITEST_PLEX_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty,
+              let baseURL = env["UITEST_PLEX_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !baseURL.isEmpty
+        else { return }
+
+        var home = PlexSampleData.servers[0]
+        home.hostDescription = baseURL
+        home.accessToken = token
+        persistToken(token, for: home.id)
+        if let idx = customServers.firstIndex(where: { $0.id == home.id }) {
+            customServers[idx] = home.persistedWithoutToken
+        } else {
+            addCustomServer(home)
+        }
+        saveToDisk()
     }
 
     func setPlexAccountToken(_ token: String?) {

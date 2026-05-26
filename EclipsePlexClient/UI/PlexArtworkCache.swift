@@ -21,6 +21,12 @@ typealias PlexCachedImage = NSImage
 
 nonisolated enum PlexArtworkCache {
     private static let subdirectory = "PlexArtworkCache"
+    /// Serializes disk reads/writes so ImageIO never decodes bytes while an
+    /// atomic cache write is replacing the same file (malloc abort).
+    private static let diskLock = NSLock()
+    /// ImageIO is not reliably re-entrant; one decode at a time avoids heap
+    /// corruption when detail artwork and playback startup overlap.
+    private static let decodeLock = NSLock()
 
     /// Decoded images keyed by `"<url>|<maxPixelSize>"` so the same poster at
     /// different display sizes share storage but don't fight for slots.
@@ -70,12 +76,16 @@ nonisolated enum PlexArtworkCache {
     /// the old mapped pages — producing the "freed pointer was not the last
     /// allocation" malloc abort during fast scroll / navigation.
     static func diskCachedData(for url: URL) -> Data? {
+        diskLock.lock()
+        defer { diskLock.unlock() }
         let file = fileURL(for: url)
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         return try? Data(contentsOf: file)
     }
 
     static func store(data: Data, for url: URL) {
+        diskLock.lock()
+        defer { diskLock.unlock() }
         let file = fileURL(for: url)
         let dir = file.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -140,6 +150,8 @@ nonisolated enum PlexArtworkCache {
 
     /// Synchronous downsample. Call from a background thread/task.
     static func downsampledImage(from data: Data, maxPixelSize: CGFloat) -> PlexCachedImage? {
+        decodeLock.lock()
+        defer { decodeLock.unlock() }
         let sourceOptions: [CFString: Any] = [
             kCGImageSourceShouldCache: false,
         ]
