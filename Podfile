@@ -1,10 +1,18 @@
 # MobileVLCKit for iOS — used by [VLCUI](https://github.com/LePips/VLCUI)
 # macOS VLCKit.xcframework is vendored under Frameworks/ (see Docs/VLCUI.md)
-platform :ios, '16.0'
+platform :ios, '26.0'
 
 target 'EclipsePlexClient' do
   use_frameworks!
   pod 'MobileVLCKit', '~> 3.6.0'
+
+  target 'EclipsePlexClientTests' do
+    inherit! :search_paths
+  end
+
+  target 'EclipsePlexClientUITests' do
+    inherit! :search_paths
+  end
 end
 
 def scope_xcconfig_to_ios(xcconfig_path)
@@ -52,7 +60,7 @@ def inject_ios_vlckit_search_paths(installer)
   installer.aggregate_targets.each do |aggregate_target|
     user_project = aggregate_target.user_project
     user_project.native_targets.each do |target|
-      next unless target.name == 'EclipsePlexClient'
+      next unless %w[EclipsePlexClient EclipsePlexClientTests EclipsePlexClientUITests].include?(target.name)
 
       target.build_configurations.each do |config|
         config.build_settings['FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]'] ||= '$(inherited)'
@@ -74,7 +82,7 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     target.build_configurations.each do |config|
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '26.0'
       config.build_settings['TVOS_DEPLOYMENT_TARGET'] = '17.0'
       config.build_settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator appletvos appletvsimulator'
     end

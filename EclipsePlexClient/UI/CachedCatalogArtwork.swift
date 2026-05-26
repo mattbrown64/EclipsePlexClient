@@ -11,13 +11,17 @@ import UIKit
 import AppKit
 #endif
 
-/// Loads artwork via `PlexArtworkCache` then falls back to network.
+/// Loads artwork through `PlexArtworkCache`'s memory → disk → network pipeline
+/// and decodes it off-main at the cell's pixel size.
 struct CachedCatalogArtwork: View {
     let url: URL
     let size: CGSize
     let cornerRadius: CGFloat
 
     @State private var loadedImage: PlexCachedImage?
+    #if os(iOS) || os(tvOS)
+    @Environment(\.displayScale) private var displayScale
+    #endif
 
     var body: some View {
         Group {
@@ -32,26 +36,47 @@ struct CachedCatalogArtwork: View {
                     .scaledToFill()
                 #endif
             } else {
-                ZStack {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(.quaternary.opacity(0.35))
-                    ProgressView()
-                }
+                placeholder
             }
         }
         .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: url) {
-            if let cached = PlexArtworkCache.cachedImage(for: url) {
-                loadedImage = cached
-                return
-            }
-            guard let data = await PlexArtworkCache.fetchData(from: url) else { return }
-            #if canImport(UIKit)
-            loadedImage = UIImage(data: data)
-            #elseif canImport(AppKit)
-            loadedImage = NSImage(data: data)
-            #endif
+            await load()
         }
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(.quaternary.opacity(0.35))
+            Image(systemName: "photo")
+                .font(.title3)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var displayScaleValue: CGFloat {
+        #if os(iOS) || os(tvOS)
+        return max(1, displayScale)
+        #else
+        return 2
+        #endif
+    }
+
+    private var maxPixelSize: CGFloat {
+        let longestEdge = max(size.width, size.height)
+        return max(64, ceil(longestEdge * displayScaleValue))
+    }
+
+    private func load() async {
+        let maxPixel = maxPixelSize
+        if let cached = PlexArtworkCache.memoryImage(for: url, maxPixelSize: maxPixel) {
+            loadedImage = cached
+            return
+        }
+        let image = await PlexArtworkCache.loadDownsampledImage(url: url, maxPixelSize: maxPixel)
+        guard !Task.isCancelled else { return }
+        loadedImage = image
     }
 }

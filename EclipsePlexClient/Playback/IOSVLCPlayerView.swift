@@ -67,6 +67,10 @@ struct IOSVLCPlayerView: UIViewRepresentable {
         private var didFailAll = false
         private var didApplyPreferredSubtitle = false
         private var lastPositionSaveTime: CFAbsoluteTime = 0
+        /// Coarse fingerprint of the last `PlaybackInformation` we forwarded to
+        /// SwiftUI. Used to skip republishing during ticks when nothing the UI
+        /// cares about has changed (tracks, selected indices, video size).
+        private var lastPublishedInfoFingerprint: String?
 
         init(
             playback: ResolvedPlayback,
@@ -109,12 +113,12 @@ struct IOSVLCPlayerView: UIViewRepresentable {
             lastPositionMs = ticks
             lastDurationMs = info.length
             onPositionUpdate(ticks, info.length)
-            onPlaybackInfoUpdate(info)
+            publishInfoIfChanged(info)
             persistPositionPeriodically(positionMs: ticks, durationMs: info.length)
         }
 
         func handleState(_ state: VLCVideoPlayer.State, info: VLCVideoPlayer.PlaybackInformation) {
-            onPlaybackInfoUpdate(info)
+            publishInfoIfChanged(info, force: true)
             onPlayerStateChange(state)
             statusText.wrappedValue = state.label
             switch state {
@@ -195,6 +199,28 @@ struct IOSVLCPlayerView: UIViewRepresentable {
 
         private func applyPreferredSubtitleIfNeeded() {
             guard case .plexStream = playback.streamOptions.subtitleSelection else { return }
+        }
+
+        /// Skips forwarding `PlaybackInformation` to SwiftUI when none of the
+        /// UI-relevant fields changed (track list, selected indices, video
+        /// size). VLC publishes the same info on every tick (~3 Hz), so this
+        /// keeps the player chrome from re-rendering 3× per second.
+        private func publishInfoIfChanged(
+            _ info: VLCVideoPlayer.PlaybackInformation,
+            force: Bool = false
+        ) {
+            let fingerprint = infoFingerprint(info)
+            if !force, fingerprint == lastPublishedInfoFingerprint { return }
+            lastPublishedInfoFingerprint = fingerprint
+            onPlaybackInfoUpdate(info)
+        }
+
+        private func infoFingerprint(_ info: VLCVideoPlayer.PlaybackInformation) -> String {
+            let subIndexes = info.subtitleTracks.map { String($0.index) }.joined(separator: ",")
+            let audIndexes = info.audioTracks.map { String($0.index) }.joined(separator: ",")
+            let w = Int(info.videoSize.width)
+            let h = Int(info.videoSize.height)
+            return "\(subIndexes)|\(info.currentSubtitleTrack.index)|\(audIndexes)|\(info.currentAudioTrack.index)|\(w)x\(h)"
         }
 
         private func persistPositionPeriodically(positionMs: Int, durationMs: Int) {

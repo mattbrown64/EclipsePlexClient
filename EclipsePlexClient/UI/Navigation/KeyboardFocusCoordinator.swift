@@ -71,6 +71,19 @@ final class KeyboardFocusCoordinator: ObservableObject {
         clampCatalogIndex()
     }
 
+    /// Apply item count, grid layout, and the activate-handler ownership in
+    /// a single MainActor turn. Each property is `@Published`, so writing them
+    /// individually used to publish 3 times per `syncCatalogFocusState()` call
+    /// — and that helper runs on every reload / sort / filter / view-mode
+    /// change. Batching reduces it to one ObservableObject change per call.
+    func updateCatalogLayout(itemCount: Int, isGrid: Bool, columnCount: Int, handlerID: String) {
+        catalogItemCount = itemCount
+        catalogUsesGrid = isGrid
+        catalogColumnCount = max(1, columnCount)
+        catalogActivateHandlerOwnerID = handlerID
+        clampCatalogIndex()
+    }
+
     func focusSidebar() {
         route = .sidebar
     }

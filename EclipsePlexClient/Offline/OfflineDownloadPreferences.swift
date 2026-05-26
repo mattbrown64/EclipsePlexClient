@@ -10,6 +10,9 @@ enum OfflineDownloadPreferences {
     private static let storageCapGBKey = "offlineDownloads.storageCapGB.v1"
     private static let defaultQualityKey = "offlineDownloads.defaultQuality.v1"
     private static let pruneWatchedKey = "offlineDownloads.pruneWatched.v1"
+    private static let notificationsEnabledKey = "offlineDownloads.notificationsEnabled.v1"
+    private static let notifyOnSuccessKey = "offlineDownloads.notifyOnSuccess.v1"
+    private static let notifyOnFailureKey = "offlineDownloads.notifyOnFailure.v1"
 
     static let defaultStorageCapGB = 50
 
@@ -51,5 +54,30 @@ enum OfflineDownloadPreferences {
 
     static var storageCapBytes: Int64 {
         Int64(storageCapGB) * 1_024 * 1_024 * 1_024
+    }
+
+    /// Master switch for download notifications (where supported).
+    static var notificationsEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: notificationsEnabledKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: notificationsEnabledKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: notificationsEnabledKey) }
+    }
+
+    static var notifyOnSuccess: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: notifyOnSuccessKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: notifyOnSuccessKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: notifyOnSuccessKey) }
+    }
+
+    static var notifyOnFailure: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: notifyOnFailureKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: notifyOnFailureKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: notifyOnFailureKey) }
     }
 }

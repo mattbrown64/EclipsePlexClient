@@ -19,52 +19,17 @@ struct MacVLCPlaybackControls: View {
     var onInteraction: () -> Void = {}
     var onSettingsEngage: () -> Void = {}
 
-    @State private var scrubberMs: Double = 0
-    @State private var isScrubbing = false
-
     var body: some View {
         VStack(spacing: 0) {
-            progressRow
+            MacVLCProgressRow(
+                controller: controller,
+                tracker: controller.positionTracker,
+                onScrubbingChanged: onScrubbingChanged
+            )
             transportRow
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .onChange(of: controller.positionMs) { _, position in
-            if !isScrubbing {
-                scrubberMs = Double(position)
-            }
-        }
-        .onAppear {
-            scrubberMs = Double(controller.positionMs)
-        }
-    }
-
-    private var progressRow: some View {
-        HStack(spacing: 10) {
-            Text(controller.formattedPosition)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 48, alignment: .trailing)
-
-            Slider(
-                value: $scrubberMs,
-                in: 0 ... max(Double(controller.durationMs), 1),
-                onEditingChanged: { editing in
-                    isScrubbing = editing
-                    onScrubbingChanged(editing)
-                    if !editing {
-                        controller.seek(toMs: Int(scrubberMs))
-                    }
-                }
-            )
-            .disabled(controller.durationMs <= 0)
-
-            Text(controller.formattedDuration)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 48, alignment: .leading)
-        }
-        .padding(.bottom, 10)
     }
 
     private var transportRow: some View {
@@ -186,6 +151,51 @@ struct MacVLCPlaybackControls: View {
             }
             .onTapGesture { onSettingsEngage() }
             .help("Embedded subtitle tracks (direct play)")
+        }
+    }
+
+    private struct MacVLCProgressRow: View {
+        let controller: MacVLCPlaybackController
+        @ObservedObject var tracker: MacVLCPositionTracker
+        var onScrubbingChanged: (Bool) -> Void
+
+        @State private var scrubberMs: Double = 0
+        @State private var isScrubbing = false
+
+        var body: some View {
+            HStack(spacing: 10) {
+                Text(tracker.formattedPosition)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, alignment: .trailing)
+
+                Slider(
+                    value: $scrubberMs,
+                    in: 0 ... max(Double(tracker.durationMs), 1),
+                    onEditingChanged: { editing in
+                        isScrubbing = editing
+                        onScrubbingChanged(editing)
+                        if !editing {
+                            controller.seek(toMs: Int(scrubberMs))
+                        }
+                    }
+                )
+                .disabled(tracker.durationMs <= 0)
+
+                Text(tracker.formattedDuration)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, alignment: .leading)
+            }
+            .padding(.bottom, 10)
+            .onChange(of: tracker.positionMs) { _, position in
+                if !isScrubbing {
+                    scrubberMs = Double(position)
+                }
+            }
+            .onAppear {
+                scrubberMs = Double(tracker.positionMs)
+            }
         }
     }
 

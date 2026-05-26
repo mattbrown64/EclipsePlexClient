@@ -9,6 +9,27 @@ import Foundation
 /// Plex JSON metadata often omits `Media`/`Part`; XML includes them for stream URLs.
 nonisolated enum PlexPlaybackXMLParser {
 
+    /// Compiled-regex cache. `NSRegularExpression(pattern:)` runs a real parser
+    /// and is significantly more expensive than a match — this XML parser is
+    /// invoked on every metadata fetch with the same handful of patterns, so
+    /// caching the compiled form per pattern string is a meaningful win.
+    /// `NSCache` is thread-safe and self-evicting under memory pressure.
+    private static let regexCache: NSCache<NSString, NSRegularExpression> = {
+        let cache = NSCache<NSString, NSRegularExpression>()
+        cache.countLimit = 64
+        return cache
+    }()
+
+    private static func cachedRegex(_ pattern: String) -> NSRegularExpression? {
+        let key = pattern as NSString
+        if let cached = regexCache.object(forKey: key) { return cached }
+        guard let compiled = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return nil
+        }
+        regexCache.setObject(compiled, forKey: key)
+        return compiled
+    }
+
     nonisolated struct Sources: Sendable {
         let metadataPath: String
         let partKey: String?
@@ -62,10 +83,7 @@ nonisolated enum PlexPlaybackXMLParser {
 
     static func parseMetadataExtras(_ xml: String) -> MetadataExtras {
         var streams: [PlexSubtitleStream] = []
-        if let regex = try? NSRegularExpression(
-            pattern: #"<Stream[^>]*streamType="3"[^>]*\bid="(\d+)"[^>]*>"#,
-            options: []
-        ) {
+        if let regex = cachedRegex(#"<Stream[^>]*streamType="3"[^>]*\bid="(\d+)"[^>]*>"#) {
             let range = NSRange(xml.startIndex..., in: xml)
             for match in regex.matches(in: xml, range: range) {
                 guard match.numberOfRanges > 1,
@@ -91,7 +109,7 @@ nonisolated enum PlexPlaybackXMLParser {
 
     /// Intro/credits markers are present in metadata XML but often missing from JSON.
     static func parseMarkers(_ xml: String) -> [PlexPlaybackMarker] {
-        guard let regex = try? NSRegularExpression(pattern: #"<Marker\b[^>]*>"#, options: []) else {
+        guard let regex = cachedRegex(#"<Marker\b[^>]*>"#) else {
             return []
         }
         let range = NSRange(xml.startIndex..., in: xml)
@@ -130,7 +148,7 @@ nonisolated enum PlexPlaybackXMLParser {
     }
 
     private static func firstCapture(_ pattern: String, in text: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+        guard let regex = cachedRegex(pattern),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               match.numberOfRanges > 1,
               let range = Range(match.range(at: 1), in: text)
@@ -139,12 +157,12 @@ nonisolated enum PlexPlaybackXMLParser {
     }
 
     private static func countMatches(_ pattern: String, in text: String) -> Int {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return 0 }
+        guard let regex = cachedRegex(pattern) else { return 0 }
         return regex.numberOfMatches(in: text, range: NSRange(text.startIndex..., in: text))
     }
 
     private static func allCaptures(_ pattern: String, in text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        guard let regex = cachedRegex(pattern) else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         return regex.matches(in: text, range: range).compactMap { match in
             guard match.numberOfRanges > 1, let r = Range(match.range(at: 1), in: text) else { return nil }

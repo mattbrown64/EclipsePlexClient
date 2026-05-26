@@ -10,12 +10,36 @@ import Network
 /// Queues and performs offline Plex downloads; persists records and files on disk.
 @MainActor
 final class OfflineDownloadManager: ObservableObject {
-    @Published private(set) var records: [OfflineDownloadRecord] = []
+    @Published private(set) var records: [OfflineDownloadRecord] = [] {
+        didSet { rebuildPlayableRatingKeyIndex() }
+    }
+    /// Bumped on every `persist()` (including throttled progress writes).
+    /// Useful for "any record changed at all" subscribers, but **do not** key
+    /// view reloads off this — it ticks ~every 2s during downloads.
     @Published private(set) var catalogRevision = 0
+    /// Bumped only when the offline catalog's *shape* changes (add / remove /
+    /// state transition / metadata mutation). Use this for `.task(id:)` reload
+    /// keys so browsing offline content during an active download doesn't
+    /// cancel and restart navigation loaders on every progress persist tick.
+    @Published private(set) var catalogStructureRevision = 0
     @Published private(set) var isOnWiFi = true
-    /// Smoothed bytes/sec for the active transfer (UI only).
-    @Published private(set) var transferSpeedByRecordID: [UUID: Double] = [:]
     @Published private(set) var persistError: String?
+
+    /// O(1) lookup index of playable downloads, keyed by server. Recomputed
+    /// whenever `records` changes; lets `isDownloaded` avoid the per-cell linear
+    /// scan that previously dominated catalog scroll cost.
+    @Published private(set) var playableRatingKeysByServer: [UUID: Set<String>] = [:]
+
+    /// Cached sum of on-disk download sizes. Recomputed only when `records`
+    /// changes; avoids the per-`body` storm of `FileManager.attributesOfItem`
+    /// stat calls that previously happened for every settings / downloads-list
+    /// re-render.
+    @Published private(set) var cachedTotalDownloadedBytes: Int64 = 0
+
+    /// Live, high-frequency progress is published from a separate object so that
+    /// per-byte updates do not republish `records` and re-render every screen
+    /// observing the download manager.
+    let progressStore = DownloadProgressStore()
 
     private var activeDownloadID: UUID?
     private var activeDownloadSession: URLSession?
@@ -25,11 +49,97 @@ final class OfflineDownloadManager: ObservableObject {
     private var pathMonitor: NWPathMonitor?
     private let monitorQueue = DispatchQueue(label: "OfflineDownloadManager.path")
     private var serverResolver: (() -> [PlexServer])?
+    /// Awaited by `configure(registry:)` so the post-launch work (scrobble
+    /// flush, backfill, queue pump) runs only after the initial disk load is
+    /// reflected in `records`.
+    private var initialLoadTask: Task<Void, Never>?
 
     init() {
-        records = OfflineDownloadStore.load()
-        reconcileStaleDownloads()
+        rebuildPlayableRatingKeyIndex()
         startPathMonitor()
+        // Disk JSON load + per-file validation moved off the main actor so
+        // launching the app no longer blocks on the downloads store. UI sees
+        // an empty download list for one runloop and is populated when the
+        // detached task completes.
+        initialLoadTask = Task { @MainActor [weak self] in
+            let loaded = await Task.detached(priority: .userInitiated) {
+                OfflineDownloadStore.load()
+            }.value
+            guard let self else { return }
+            self.records = loaded
+            self.reconcileStaleDownloads()
+        }
+    }
+
+    /// Last-known "catalog shape" signature, used to decide whether a `records`
+    /// mutation should bump `catalogStructureRevision`. The signature is just
+    /// `(id, state, ratingKey, title, completedAt)` per record — anything that
+    /// alters how the offline catalog *displays*. Progress bytes / errors are
+    /// deliberately excluded so download ticks don't trigger reloads.
+    private var lastCatalogStructureSignature: String = ""
+    /// Coalesces async size-walk requests so rapid `records` mutations don't
+    /// spawn N parallel detached stat walks.
+    private var pendingTotalBytesRecompute: Task<Void, Never>?
+
+    private func rebuildPlayableRatingKeyIndex() {
+        var map: [UUID: Set<String>] = [:]
+        var signatureParts: [String] = []
+        signatureParts.reserveCapacity(records.count)
+        for record in records {
+            if record.isPlayable {
+                map[record.serverId, default: []].insert(record.ratingKey)
+            }
+            signatureParts.append(
+                "\(record.id.uuidString)|\(record.state.rawValue)|\(record.ratingKey)|\(record.title)|\(record.completedAt?.timeIntervalSince1970 ?? 0)"
+            )
+        }
+        playableRatingKeysByServer = map
+
+        let signature = signatureParts.joined(separator: ";")
+        if signature != lastCatalogStructureSignature {
+            lastCatalogStructureSignature = signature
+            catalogStructureRevision &+= 1
+            // Only the shape-changing transitions need to revalidate the
+            // on-disk size (new download completed, item deleted, etc.).
+            // Progress persist ticks now skip the stat walk entirely.
+            scheduleTotalBytesRecompute()
+        }
+    }
+
+    /// Schedules an off-main `FileManager.attributesOfItem` walk to recompute
+    /// `cachedTotalDownloadedBytes`. Previously the stat walk ran inline in
+    /// `records.didSet`, which meant every batched progress mutation paid for
+    /// N FileManager stat calls on the main actor. Now it's coalesced and
+    /// detached at `.utility`.
+    private func scheduleTotalBytesRecompute() {
+        pendingTotalBytesRecompute?.cancel()
+        let recordsSnapshot = records
+        pendingTotalBytesRecompute = Task { @MainActor [weak self] in
+            // Brief coalescing window so back-to-back didSet calls collapse.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard !Task.isCancelled, let self else { return }
+            let total = await Task.detached(priority: .utility) {
+                Self.computeTotalDownloadedBytes(for: recordsSnapshot)
+            }.value
+            guard !Task.isCancelled else { return }
+            self.cachedTotalDownloadedBytes = total
+        }
+    }
+
+    /// Pure helper safe to run off the main actor. Mirrors the path-resolution
+    /// rules in `localFileURL(for:)` so the off-main walk doesn't need actor-
+    /// isolated access to `self`.
+    private nonisolated static func computeTotalDownloadedBytes(for records: [OfflineDownloadRecord]) -> Int64 {
+        var total: Int64 = 0
+        let downloadsDir = OfflineDownloadStore.downloadsDirectory
+        for record in records {
+            guard let relative = record.relativeFilePath else { continue }
+            let url = downloadsDir.appendingPathComponent(relative)
+            if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64 {
+                total &+= size
+            }
+        }
+        return total
     }
 
     deinit {
@@ -38,11 +148,13 @@ final class OfflineDownloadManager: ObservableObject {
 
     func configure(registry: PlexServerRegistry) {
         serverResolver = { registry.allServers }
-        reconcileStaleDownloads()
-        Task {
-            await OfflineScrobbleQueue.flush(servers: registry.allServers)
-            await backfillMissingThumbs()
-            await pumpQueue()
+        Task { [weak self] in
+            // Wait for the off-main initial load + reconcile to finish before
+            // touching `records` for scrobble flush / thumb backfill / queue pump.
+            await self?.initialLoadTask?.value
+            OfflineScrobbleQueue.scheduleFlush(servers: registry.allServers)
+            await self?.backfillMissingThumbs()
+            await self?.pumpQueue()
         }
     }
 
@@ -89,7 +201,7 @@ final class OfflineDownloadManager: ObservableObject {
     }
 
     func isDownloaded(serverId: UUID, ratingKey: String) -> Bool {
-        records.contains { $0.serverId == serverId && $0.ratingKey == ratingKey && $0.isPlayable }
+        playableRatingKeysByServer[serverId]?.contains(ratingKey) ?? false
     }
 
     func playableRecord(serverId: UUID, ratingKey: String) -> OfflineDownloadRecord? {
@@ -112,12 +224,7 @@ final class OfflineDownloadManager: ObservableObject {
     }
 
     var totalDownloadedBytes: Int64 {
-        records.compactMap { record -> Int64? in
-            guard let url = localFileURL(for: record) else { return nil }
-            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-            return attrs?[.size] as? Int64
-        }
-        .reduce(0, +)
+        cachedTotalDownloadedBytes
     }
 
     // MARK: - Enqueue
@@ -256,7 +363,7 @@ final class OfflineDownloadManager: ObservableObject {
             tearDownActiveDownloadSession()
             activeDownloadID = nil
         }
-        transferSpeedByRecordID.removeValue(forKey: id)
+        progressStore.remove(id: id)
         updateRecord(id: id) {
             $0.state = .cancelled
             $0.errorMessage = nil
@@ -272,45 +379,64 @@ final class OfflineDownloadManager: ObservableObject {
 
     /// Removes every download for a TV show group key.
     func deleteShow(groupKey: String) {
-        let ids = records.filter { $0.showGroupKey == groupKey }.map(\.id)
-        for id in ids {
-            delete(id: id)
-        }
+        let ids = Set(records.filter { $0.showGroupKey == groupKey }.map(\.id))
+        deleteIDs(ids)
     }
 
     func delete(id: UUID) {
-        if let record = records.first(where: { $0.id == id }),
-           let url = localFileURL(for: record) {
-            try? FileManager.default.removeItem(at: url)
-        }
-        records.removeAll { $0.id == id }
-        persist()
+        deleteIDs([id])
     }
 
     /// Removes all completed download files.
     func deleteAllCompleted() {
-        let ids = records.filter { $0.state == .completed }.map(\.id)
-        for id in ids { delete(id: id) }
+        let ids = Set(records.filter { $0.state == .completed }.map(\.id))
+        deleteIDs(ids)
+    }
+
+    /// Bulk delete that performs file removal up front and then rewrites the
+    /// records array exactly once, so the playable-key index rebuild and the
+    /// disk persist only run a single time for the whole batch.
+    private func deleteIDs(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        let urls = records
+            .filter { ids.contains($0.id) }
+            .compactMap { localFileURL(for: $0) }
+        for url in urls {
+            try? FileManager.default.removeItem(at: url)
+        }
+        batchMutateRecords { recs in
+            recs.removeAll { ids.contains($0.id) }
+        }
     }
 
     /// Re-queues failed downloads.
     func retryFailedDownloads() {
-        for index in records.indices where records[index].state == .failed {
-            records[index].state = .pending
-            records[index].errorMessage = nil
+        batchMutateRecords { recs in
+            for index in recs.indices where recs[index].state == .failed {
+                recs[index].state = .pending
+                recs[index].errorMessage = nil
+            }
         }
-        persist()
         Task { await pumpQueue() }
     }
 
+    /// Single-write batch mutator. Folds N record changes into one `records`
+    /// assignment so the `didSet`-driven index rebuild and disk persist each
+    /// run once per logical operation instead of once per mutated row.
+    private func batchMutateRecords(
+        persist shouldPersist: Bool = true,
+        _ block: (inout [OfflineDownloadRecord]) -> Void
+    ) {
+        var copy = records
+        block(&copy)
+        records = copy
+        if shouldPersist {
+            persist()
+        }
+    }
+
     var totalDownloadBytes: Int64 {
-        records.compactMap { record -> Int64? in
-            guard let url = localFileURL(for: record),
-                  let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                  let size = attrs[.size] as? Int64
-            else { return nil }
-            return size
-        }.reduce(0, +)
+        cachedTotalDownloadedBytes
     }
 
     func server(for record: OfflineDownloadRecord) -> PlexServer? {
@@ -318,7 +444,21 @@ final class OfflineDownloadManager: ObservableObject {
     }
 
     func transferSpeed(for recordID: UUID) -> Double? {
-        transferSpeedByRecordID[recordID]
+        progressStore.speed(for: recordID)
+    }
+
+    /// Returns the most up-to-date progress snapshot, preferring the live store
+    /// (active downloads) and falling back to the persisted record fields.
+    func liveProgress(for record: OfflineDownloadRecord) -> DownloadProgressStore.Snapshot {
+        if let live = progressStore.snapshot(for: record.id) {
+            return live
+        }
+        return DownloadProgressStore.Snapshot(
+            bytesWritten: record.bytesWritten,
+            expectedBytes: record.expectedBytes,
+            progress: record.progress,
+            speedBytesPerSecond: 0
+        )
     }
 
     func pumpQueueIfAllowed() async {
@@ -326,7 +466,7 @@ final class OfflineDownloadManager: ObservableObject {
     }
 
     func retry(id: UUID) {
-        transferSpeedByRecordID.removeValue(forKey: id)
+        progressStore.remove(id: id)
         updateRecord(id: id) {
             $0.state = .pending
             $0.progress = 0
@@ -381,7 +521,11 @@ final class OfflineDownloadManager: ObservableObject {
                 $0.completedAt = Date()
                 $0.errorMessage = nil
             }
+            let completedTitle = next.title
             persist()
+            Task {
+                await OfflineDownloadNotifications.scheduleCompletionNotification(title: completedTitle)
+            }
             await enforceStorageCap()
         } catch {
             fail(id: next.id, message: error.localizedDescription)
@@ -422,7 +566,7 @@ final class OfflineDownloadManager: ObservableObject {
             task.resume()
         }
         tearDownActiveDownloadSession()
-        transferSpeedByRecordID.removeValue(forKey: recordID)
+        progressStore.remove(id: recordID)
         lastProgressLogAt.removeValue(forKey: recordID)
         lastPersistAt.removeValue(forKey: recordID)
 
@@ -449,14 +593,18 @@ final class OfflineDownloadManager: ObservableObject {
             progress = min(0.99, max(0.02, Double(bytesWritten) / 2_000_000_000))
         }
 
-        transferSpeedByRecordID[recordID] = speedBytesPerSecond
-        updateRecord(id: recordID) {
-            $0.bytesWritten = bytesWritten
-            $0.progress = progress
-            if let expectedBytes, expectedBytes > 0 {
-                $0.expectedBytes = expectedBytes
-            }
-        }
+        // High-frequency: only the progress store publishes here. The `records`
+        // array is *not* mutated each tick (which would republish to every
+        // screen observing the download manager).
+        progressStore.update(
+            id: recordID,
+            snapshot: DownloadProgressStore.Snapshot(
+                bytesWritten: bytesWritten,
+                expectedBytes: expectedBytes,
+                progress: progress,
+                speedBytesPerSecond: speedBytesPerSecond
+            )
+        )
 
         let now = Date()
         if now.timeIntervalSince(lastProgressLogAt[recordID] ?? .distantPast) >= 1 {
@@ -466,8 +614,18 @@ final class OfflineDownloadManager: ObservableObject {
             )
         }
 
+        // Low-frequency: sync the snapshot into the persisted record every ~2s
+        // so a crash/quit during a download still resumes with an accurate
+        // progress bar after re-launch.
         if now.timeIntervalSince(lastPersistAt[recordID] ?? .distantPast) >= 2 {
             lastPersistAt[recordID] = now
+            updateRecord(id: recordID) {
+                $0.bytesWritten = bytesWritten
+                $0.progress = progress
+                if let expectedBytes, expectedBytes > 0 {
+                    $0.expectedBytes = expectedBytes
+                }
+            }
             persist()
         }
     }
@@ -481,21 +639,23 @@ final class OfflineDownloadManager: ObservableObject {
     /// Marks completed rows missing/invalid on disk as failed (e.g. after a bad transcode-URL download).
     private func reconcileStaleDownloads() {
         var changed = false
-        for index in records.indices {
-            guard records[index].state == .completed else { continue }
-            guard let path = records[index].relativeFilePath else {
-                records[index].state = .failed
-                records[index].errorMessage = "Download file is missing."
-                changed = true
-                continue
-            }
-            let url = OfflineDownloadStore.downloadsDirectory.appendingPathComponent(path)
-            do {
-                try OfflineDownloadFileValidator.validate(at: url)
-            } catch {
-                records[index].state = .failed
-                records[index].errorMessage = error.localizedDescription
-                changed = true
+        batchMutateRecords(persist: false) { recs in
+            for index in recs.indices {
+                guard recs[index].state == .completed else { continue }
+                guard let path = recs[index].relativeFilePath else {
+                    recs[index].state = .failed
+                    recs[index].errorMessage = "Download file is missing."
+                    changed = true
+                    continue
+                }
+                let url = OfflineDownloadStore.downloadsDirectory.appendingPathComponent(path)
+                do {
+                    try OfflineDownloadFileValidator.validate(at: url)
+                } catch {
+                    recs[index].state = .failed
+                    recs[index].errorMessage = error.localizedDescription
+                    changed = true
+                }
             }
         }
         if changed {
@@ -506,7 +666,7 @@ final class OfflineDownloadManager: ObservableObject {
     private func fail(id: UUID, message: String) {
         let title = records.first(where: { $0.id == id })?.title ?? id.uuidString
         AppLog.offline("Download failed: \(title) — \(message)")
-        transferSpeedByRecordID.removeValue(forKey: id)
+        progressStore.remove(id: id)
         lastProgressLogAt.removeValue(forKey: id)
         lastPersistAt.removeValue(forKey: id)
         updateRecord(id: id) {
@@ -515,6 +675,9 @@ final class OfflineDownloadManager: ObservableObject {
         }
         persist()
         activeDownloadID = nil
+        Task {
+            await OfflineDownloadNotifications.scheduleFailureNotification(title: title, message: message)
+        }
     }
 
     private func canStartDownload() -> Bool {
@@ -738,6 +901,14 @@ private final class OfflineDownloadSessionDelegate: NSObject, URLSessionDownload
         Task { @MainActor [weak self] in
             self?.resumeOnce(with: .failure(error))
         }
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        #if os(iOS)
+        let completion = OfflineDownloadBackgroundSession.backgroundCompletionHandler
+        OfflineDownloadBackgroundSession.backgroundCompletionHandler = nil
+        completion?()
+        #endif
     }
 
     @MainActor

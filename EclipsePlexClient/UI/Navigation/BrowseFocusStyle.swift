@@ -25,8 +25,8 @@ private enum BrowseFocusMetrics {
 
 extension View {
     /// Highlights the view when it holds browse focus (keyboard / future remote).
-    func browseFocusHighlight(active: Bool, chrome: BrowseFocusChrome) -> some View {
-        modifier(BrowseFocusHighlightModifier(active: active, chrome: chrome))
+    func browseFocusHighlight(active: Bool, pressed: Bool = false, chrome: BrowseFocusChrome) -> some View {
+        modifier(BrowseFocusHighlightModifier(active: active, pressed: pressed, chrome: chrome))
     }
 
     /// Backward-compatible alias; prefer `browseFocusHighlight(active:chrome:)`.
@@ -37,12 +37,13 @@ extension View {
 
 private struct BrowseFocusHighlightModifier: ViewModifier {
     let active: Bool
+    let pressed: Bool
     let chrome: BrowseFocusChrome
 
     @State private var isHovered = false
 
     private var isEmphasized: Bool {
-        active || isHovered
+        active || isHovered || pressed
     }
 
     func body(content: Content) -> some View {
@@ -57,6 +58,7 @@ private struct BrowseFocusHighlightModifier: ViewModifier {
             }
         }
         .animation(BrowseFocusMetrics.animation, value: isEmphasized)
+        .animation(BrowseFocusMetrics.animation, value: pressed)
         .accessibilityAddTraits(isEmphasized ? [.isSelected] : [])
 #if os(macOS)
         .onHover { isHovered = $0 }
@@ -65,12 +67,13 @@ private struct BrowseFocusHighlightModifier: ViewModifier {
 
     @ViewBuilder
     private func sidebarRowStyle(content: Content) -> some View {
+        let fillOpacity: CGFloat = pressed ? 0.28 : (active || isHovered ? 0.18 : 0)
         content
             .padding(.vertical, 3)
             .padding(.horizontal, 6)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(isEmphasized ? 0.18 : 0))
+                    .fill(Color.accentColor.opacity(fillOpacity))
             }
             .overlay(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -82,43 +85,62 @@ private struct BrowseFocusHighlightModifier: ViewModifier {
 
     @ViewBuilder
     private func catalogPosterStyle(content: Content) -> some View {
-        content
+        // Idle cells (the common case in a long catalog) used to pay for a
+        // zero-radius shadow + a zero-opacity background fill + zero-opacity
+        // stroke. Each still allocates a Core Animation layer for the effect.
+        // Render those decorations only when the cell is actually emphasized.
+        let base = content
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(BrowseFocusMetrics.posterPadding)
-            .background {
-                RoundedRectangle(cornerRadius: BrowseFocusMetrics.posterCornerRadius, style: .continuous)
-                    .fill(Color.accentColor.opacity(isEmphasized ? BrowseFocusMetrics.posterFillOpacity : 0))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: BrowseFocusMetrics.posterCornerRadius, style: .continuous)
-                    .strokeBorder(
-                        Color.accentColor.opacity(isEmphasized ? 1 : 0),
-                        lineWidth: BrowseFocusMetrics.posterBorderWidth
-                    )
-            }
-            .shadow(
-                color: Color.accentColor.opacity(isEmphasized ? 0.4 : 0),
-                radius: isEmphasized ? 12 : 0,
-                y: isEmphasized ? 4 : 0
-            )
-            .zIndex(isEmphasized ? 1 : 0)
+
+        if isEmphasized || pressed {
+            let fillOpacity: CGFloat = pressed ? 0.42 : BrowseFocusMetrics.posterFillOpacity
+            base
+                .background {
+                    RoundedRectangle(cornerRadius: BrowseFocusMetrics.posterCornerRadius, style: .continuous)
+                        .fill(Color.accentColor.opacity(fillOpacity))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: BrowseFocusMetrics.posterCornerRadius, style: .continuous)
+                        .strokeBorder(
+                            Color.accentColor.opacity(pressed ? 1 : 1),
+                            lineWidth: BrowseFocusMetrics.posterBorderWidth
+                        )
+                }
+                .shadow(
+                    color: Color.accentColor.opacity(0.4),
+                    radius: 12,
+                    y: 4
+                )
+                .zIndex(1)
+        } else {
+            base
+        }
     }
 
     @ViewBuilder
     private func catalogListRowStyle(content: Content) -> some View {
-        content
+        let base = content
             .padding(.vertical, 4)
             .padding(.horizontal, 6)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.opacity(isEmphasized ? 0.14 : 0))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(
-                        Color.accentColor.opacity(isEmphasized ? 0.85 : 0),
-                        lineWidth: 2
-                    )
-            }
+
+        if isEmphasized || pressed {
+            let fillOpacity: CGFloat = pressed ? 0.22 : 0.14
+            let borderOpacity: CGFloat = pressed ? 0.95 : 0.85
+            base
+                .background {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.accentColor.opacity(fillOpacity))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(
+                            Color.accentColor.opacity(borderOpacity),
+                            lineWidth: pressed ? 2.5 : 2
+                        )
+                }
+        } else {
+            base
+        }
     }
 }

@@ -7,6 +7,7 @@
 
 import CoreGraphics
 import Foundation
+import OSLog
 
 private let plexLibraryPluginIdentifier = "com.plexapp.plugins.library"
 private let catalogPageSize = 50
@@ -64,13 +65,18 @@ extension PlexMediaServerClient {
     }
 
     func fetchMediaDetail(ratingKey: String) async throws -> PlexMediaDetail {
-        let rows = try await fetchAllRecords(path: "/library/metadata/\(ratingKey)")
-        guard let first = rows.first, let detail = mediaDetail(from: first) else {
+        // Single-item path — paginating is wasted work. Markers come from a
+        // different `Accept: application/xml` response, so fetch in parallel.
+        async let jsonRecords = fetchOnePage(path: "/library/metadata/\(ratingKey)", query: [])
+        async let xmlMarkers: [PlexPlaybackMarker] = {
+            (try? await fetchPlaybackMarkersFromXML(ratingKey: ratingKey)) ?? []
+        }()
+        let body = try await jsonRecords
+        guard let first = body.records.first, let detail = mediaDetail(from: first) else {
             throw PlexAPIError.decodingFailed("Could not read Plex metadata for \(ratingKey).")
         }
-        let xmlMarkers = (try? await fetchPlaybackMarkersFromXML(ratingKey: ratingKey)) ?? []
         let merged = PlexPlaybackMarkerParser.merged(
-            xml: xmlMarkers,
+            xml: await xmlMarkers,
             json: detail.markers,
             durationMs: detail.durationMs
         )
@@ -260,11 +266,21 @@ extension PlexMediaServerClient {
         server: PlexServer,
         options: PlaybackStreamOptions
     ) async throws -> PlexPlaybackStreamResolution {
+        let state = AppSignposts.signposter.beginInterval("plex.resolveCandidates", "\(ratingKey, privacy: .public)")
+        defer { AppSignposts.signposter.endInterval("plex.resolveCandidates", state) }
+
         let xml = try await fetchMetadataXML(ratingKey: ratingKey)
         let extras = PlexPlaybackXMLParser.parseMetadataExtras(xml)
+        // Parse Sources from the same XML we just fetched — `resolvePlaybackStream`
+        // and the forced-transcode branch would otherwise refetch this URL twice.
+        let sharedSources = PlexPlaybackXMLParser.parse(xml, ratingKey: ratingKey)
         var candidates: [PlexPlaybackStreamCandidate] = []
 
-        let direct = try await resolvePlaybackStream(ratingKey: ratingKey, server: server)
+        let direct = try await resolvePlaybackStream(
+            ratingKey: ratingKey,
+            server: server,
+            cachedSources: sharedSources
+        )
         candidates.append(
             PlexPlaybackStreamCandidate(
                 url: direct.url,
@@ -275,7 +291,12 @@ extension PlexMediaServerClient {
         )
 
         if options.videoResolution.forcesTranscode, direct.delivery == .directPlay {
-            let sources = try await fetchPlaybackSources(ratingKey: ratingKey)
+            let sources: PlexPlaybackXMLParser.Sources
+            if let sharedSources {
+                sources = sharedSources
+            } else {
+                sources = try await fetchPlaybackSources(ratingKey: ratingKey)
+            }
             let sessionID = UUID().uuidString
             let vlcHeaders = server.vlcHTTPHeaderFields
             var transcodeQuery = server.plexTranscodeQueryItems(

@@ -14,12 +14,15 @@ struct MediaDetailView: View {
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
     @EnvironmentObject private var playbackPresenter: PlaybackPresenter
+    @EnvironmentObject private var plexRegistry: PlexServerRegistry
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.dismissBrowseMenu) private var dismissBrowseMenu
 
     @State private var detail: PlexMediaDetail?
     @State private var isLoadingDetail = false
     @State private var detailError: String?
     @State private var isUpdatingWatchState = false
+    @State private var metadataAdminState = MediaMetadataAdminState()
     @State private var extras: [PlexExtraItem] = []
     @State private var relatedShelves: [PlexHubShelf] = []
 #if os(iOS) || os(tvOS)
@@ -99,6 +102,26 @@ struct MediaDetailView: View {
                     metaLine("Server", plexServer.name)
                 }
                 watchControls
+                if let ratingKey = playbackRatingKey {
+                    MediaMetadataAdminSection(
+                        plexServer: plexServer,
+                        ratingKey: ratingKey,
+                        title: detailTitle,
+                        summary: detailSummary,
+                        year: detail?.year ?? nodeYear,
+                        showTitle: fixMatchShowTitle,
+                        seasonTitle: fixMatchSeasonTitle,
+                        sectionType: library.sectionType,
+                        state: $metadataAdminState,
+                        onMetadataUpdated: {
+                            await loadDetail()
+                        },
+                        onItemDeleted: {
+                            dismiss()
+                        }
+                    )
+                    .environmentObject(plexRegistry)
+                }
                 if node.supportsVideoPlayback,
                    let ratingKey = playbackRatingKey,
                    !plexServer.isDownloadsServer {
@@ -108,8 +131,7 @@ struct MediaDetailView: View {
                         title: detailTitle,
                         thumbPath: node.listThumbPath
                     )
-                    .environment(\.offlineDownloads, downloadManager)
-                    .environmentObject(downloadManager)
+                    .offlineDownloads(downloadManager)
                 }
                 if plexServer.isDownloadsServer, let record = offlineRecord {
                     offlineFileActions(record: record)
@@ -172,6 +194,33 @@ struct MediaDetailView: View {
         detail?.title ?? node.listTitle
     }
 
+    private var detailSummary: String? {
+        if let detail, let summary = detail.summary, !summary.isEmpty { return summary }
+        switch node {
+        case .movie(let movie): return movie.summary
+        case .episode(let episode): return episode.summary
+        default: return nil
+        }
+    }
+
+    private var nodeYear: Int? {
+        switch node {
+        case .movie(let movie): return movie.year
+        case .episode: return nil
+        default: return nil
+        }
+    }
+
+    private var fixMatchShowTitle: String? {
+        guard case .episode(let episode) = node else { return nil }
+        return episode.showTitle
+    }
+
+    private var fixMatchSeasonTitle: String? {
+        guard case .episode(let episode) = node else { return nil }
+        return "Season \(episode.seasonNumber)"
+    }
+
     private var playbackRatingKey: String? {
         node.playbackRatingKey
     }
@@ -190,7 +239,7 @@ struct MediaDetailView: View {
     private func heroArtwork(_ thumbPath: String?) -> some View {
         HStack {
             Spacer(minLength: 0)
-            CatalogArtworkImage(
+            let artwork = CatalogArtworkImage(
                 plexServer: plexServer,
                 thumbPath: thumbPath,
                 artworkServer: originPlexServer,
@@ -202,6 +251,31 @@ struct MediaDetailView: View {
                     )
                     && playbackRatingKey != nil
             )
+            if let ratingKey = playbackRatingKey {
+                artwork
+                    .mediaMetadataAdmin(
+                        plexServer: plexServer,
+                        ratingKey: ratingKey,
+                        title: detailTitle,
+                        summary: detailSummary,
+                        year: detail?.year ?? nodeYear,
+                        state: $metadataAdminState,
+                        showTitle: fixMatchShowTitle,
+                        seasonTitle: fixMatchSeasonTitle,
+                        sectionType: library.sectionType,
+                        includesPresentation: false,
+                        includesContextMenu: true,
+                        onMetadataUpdated: {
+                            await loadDetail()
+                        },
+                        onItemDeleted: {
+                            dismiss()
+                        }
+                    )
+                    .environmentObject(plexRegistry)
+            } else {
+                artwork
+            }
             Spacer(minLength: 0)
         }
     }
@@ -409,10 +483,26 @@ struct MediaDetailView: View {
         defer { isLoadingDetail = false }
         do {
             let client = try PlexMediaServerClient(server: plexServer)
-            detail = try await client.fetchMediaDetail(ratingKey: ratingKey)
-            extras = (try? await client.fetchExtras(ratingKey: ratingKey)) ?? []
-            relatedShelves = (try? await client.fetchRelatedHubShelves(ratingKey: ratingKey, library: library)) ?? []
+            // Extras + related shelves don't depend on `detail`; fan them out so
+            // the detail screen first-paint waits on the slowest one, not the sum.
+            async let detailLoad = client.fetchMediaDetail(ratingKey: ratingKey)
+            async let extrasLoad: [PlexExtraItem] = {
+                (try? await client.fetchExtras(ratingKey: ratingKey)) ?? []
+            }()
+            async let relatedLoad: [PlexHubShelf] = {
+                (try? await client.fetchRelatedHubShelves(ratingKey: ratingKey, library: library)) ?? []
+            }()
+            let fetchedDetail = try await detailLoad
+            let fetchedExtras = await extrasLoad
+            let fetchedRelated = await relatedLoad
+            guard !Task.isCancelled else { return }
+            detail = fetchedDetail
+            extras = fetchedExtras
+            relatedShelves = fetchedRelated
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             detailError = error.localizedDescription
         }
     }
@@ -429,8 +519,13 @@ struct MediaDetailView: View {
             } else {
                 try await client.markItemPlayed(ratingKey: ratingKey, durationMs: detail.durationMs)
             }
-            self.detail = try await client.fetchMediaDetail(ratingKey: ratingKey)
+            let refreshed = try await client.fetchMediaDetail(ratingKey: ratingKey)
+            guard !Task.isCancelled else { return }
+            self.detail = refreshed
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             detailError = error.localizedDescription
         }
     }
@@ -441,9 +536,9 @@ private struct WatchLinkButtonStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         if isProminent {
-            content.buttonStyle(.borderedProminent)
+            content.buttonStyle(.pressableBorderedProminent)
         } else {
-            content.buttonStyle(.bordered)
+            content.buttonStyle(.pressableBordered)
         }
     }
 }

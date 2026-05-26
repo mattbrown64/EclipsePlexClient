@@ -22,9 +22,21 @@ extension PlexMediaServerClient {
     }
 
     /// Resolves a playable URL for VLC. Avoids blocking on transcode/decision endpoints (they can take minutes).
-    func resolvePlaybackStream(ratingKey: String, server: PlexServer) async throws -> PlexPlaybackStream {
+    ///
+    /// Pass `cachedSources` when the caller has already parsed `/library/metadata/{ratingKey}`
+    /// (e.g. `resolvePlaybackStreamCandidates`) to avoid a redundant HTTP round trip.
+    func resolvePlaybackStream(
+        ratingKey: String,
+        server: PlexServer,
+        cachedSources: PlexPlaybackXMLParser.Sources? = nil
+    ) async throws -> PlexPlaybackStream {
         AppLog.networkDebug("Plex resolve start ratingKey=\(ratingKey)")
-        let sources = try await fetchPlaybackSources(ratingKey: ratingKey)
+        let sources: PlexPlaybackXMLParser.Sources
+        if let cachedSources {
+            sources = cachedSources
+        } else {
+            sources = try await fetchPlaybackSources(ratingKey: ratingKey)
+        }
         let sessionID = UUID().uuidString
         let vlcHeaders = server.vlcHTTPHeaderFields
 

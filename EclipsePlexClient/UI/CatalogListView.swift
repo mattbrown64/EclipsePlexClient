@@ -67,11 +67,26 @@ struct CatalogListView: View {
     @State private var availableGenres: [PlexLibraryGenre] = []
     @State private var pendingDeleteShowGroupKey: String?
     @State private var showDeleteShowConfirm = false
+    /// Cached output of filter + sort. Recomputing on every `body` pass was an
+    /// O(n log n) hit per keystroke / focus change for large libraries.
+    @State private var displayedNodes: [PlexCatalogNode] = []
+    /// Pre-indexed mirror of `displayedNodes`. ForEach previously wrapped
+    /// `displayedNodes.enumerated()` in `Array(...)` on every render — that
+    /// allocated a fresh `[(Int, PlexCatalogNode)]` per body pass. Caching the
+    /// indexed view as @State eliminates that and preserves identity-based
+    /// row diffing via `.id` on `IndexedCatalogNode`.
+    @State private var indexedDisplayedNodes: [IndexedCatalogNode] = []
+    /// Identity of the last reload so changing a filter doesn't wipe the screen
+    /// while refetching — only server/library/parent transitions blank the UI.
+    @State private var lastReloadIdentity: String = ""
+    /// Debounce handle for search keystrokes; coalesces focus + filter work.
+    @State private var searchDebounceTask: Task<Void, Never>?
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.catalogNavigationActions) private var catalogNavigationActions
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    @EnvironmentObject private var plexRegistry: PlexServerRegistry
 
     @State private var catalogGridColumnCount: Int = 5
 
@@ -114,8 +129,14 @@ struct CatalogListView: View {
         return "catalogWatchFilter.v1.\(plexServer.id.uuidString).\(library.id).\(parentKey)"
     }
 
-    private var displayedNodes: [PlexCatalogNode] {
-        Self.sortedNodes(filteredNodes, by: sortOrder)
+    /// Recomputes `displayedNodes` from current inputs. Cheap to call on
+    /// `onChange`, never on `body`.
+    private func recomputeDisplayedNodes() {
+        let filtered = filteredNodes
+        let sorted = Self.sortedNodes(filtered, by: sortOrder)
+        displayedNodes = sorted
+        indexedDisplayedNodes = sorted.enumerated().map { IndexedCatalogNode(index: $0.offset, node: $0.element) }
+        syncCatalogFocusState()
     }
 
     private var catalogFocusRegistrationID: String {
@@ -140,10 +161,35 @@ struct CatalogListView: View {
         case .playlist(let k): parentKey = "playlist:\(k)"
         }
         if plexServer.isDownloadsServer {
-            return "offline|\(library.id)|\(parentKey)|\(downloadManager.catalogRevision)"
+            // Use the *structural* revision, not `catalogRevision`. Otherwise
+            // every throttled persist tick during an active download
+            // cancels and restarts this view's `.task(id:)` loader — that
+            // restart churn was a navigation-crash amplifier (stale `.task`
+            // continuations completing on a torn-down view).
+            return "offline|\(library.id)|\(parentKey)|\(downloadManager.catalogStructureRevision)"
         }
         let filterKey = "\(listFilters.genreFilterKey ?? "")|\(listFilters.year.map(String.init) ?? "")"
-        return "\(plexServer.id.uuidString)|\(library.id)|\(parentKey)|\(watchFilter.rawValue)|\(filterKey)|\(plexServer.usesLivePlexAPI)"
+        // `plexServer.usesLivePlexAPI` is intentionally omitted: it can flip
+        // mid-navigation during a background reachability refresh, which used
+        // to cancel and restart `reloadCatalog()` and blank the visible
+        // catalog. `reloadCatalog()` already reads the live value when it
+        // runs, so the key only needs to encode the *user-selected* shape.
+        return "\(plexServer.id.uuidString)|\(library.id)|\(parentKey)|\(watchFilter.rawValue)|\(filterKey)"
+    }
+
+    /// Identity key — changes only when the screen is showing a fundamentally
+    /// different data set (server/library/parent). Filter/search/sort changes
+    /// do NOT change this, so they refetch without blanking the UI.
+    private var reloadIdentityKey: String {
+        let parentKey: String
+        switch parent {
+        case .root: parentKey = "root"
+        case .show(let k): parentKey = "show:\(k)"
+        case .season(let k): parentKey = "season:\(k)"
+        case .collection(let k): parentKey = "collection:\(k)"
+        case .playlist(let k): parentKey = "playlist:\(k)"
+        }
+        return "\(plexServer.id.uuidString)|\(library.id)|\(parentKey)|\(plexServer.usesLivePlexAPI)"
     }
 
     private var listFiltersStorageKey: String {
@@ -253,6 +299,12 @@ struct CatalogListView: View {
             .toolbar { catalogToolbarContent }
             .refreshable { await reloadCatalog() }
             .task(id: loadTaskKey) { await reloadCatalog() }
+            .task(id: "\(plexServer.id)|adminCapabilities") {
+                await MediaMetadataAdminAccess.refreshCapabilitiesIfNeeded(
+                    plexServer: plexServer,
+                    registry: plexRegistry
+                )
+            }
             .onAppear {
                 loadSavedSortOrder()
                 loadSavedWatchFilter()
@@ -321,28 +373,35 @@ struct CatalogListView: View {
             }
             .onDisappear {
                 focusCoordinator.unregisterCatalogActivateHandler(id: catalogFocusRegistrationID)
+                searchDebounceTask?.cancel()
+                searchDebounceTask = nil
             }
             .onChange(of: focusCoordinator.catalogActivateRequestID) { _, _ in
                 guard focusCoordinator.catalogActivateHandlerOwnerID == catalogFocusRegistrationID else { return }
                 openFocusedCatalogItem()
             }
-            .onChange(of: displayedNodes.count) { _, _ in syncCatalogFocusState() }
-            .onChange(of: sortOrder) { _, _ in syncCatalogFocusState() }
-            .onChange(of: watchFilter) { _, _ in syncCatalogFocusState() }
-            .onChange(of: searchText) { _, _ in syncCatalogFocusState() }
+            .onChange(of: sortOrder) { _, _ in recomputeDisplayedNodes() }
+            .onChange(of: searchText) { _, _ in
+                searchDebounceTask?.cancel()
+                searchDebounceTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard !Task.isCancelled else { return }
+                    recomputeDisplayedNodes()
+                }
+            }
             .onChange(of: catalogGridColumnCount) { _, _ in syncCatalogFocusState() }
             .onChange(of: viewMode) { _, _ in syncCatalogFocusState() }
     }
 
     private func syncCatalogFocusState() {
         let nodes = displayedNodes
-        focusCoordinator.setCatalogItemCount(nodes.count)
         let isGrid = viewMode == .grid
-        focusCoordinator.setCatalogLayout(
+        focusCoordinator.updateCatalogLayout(
+            itemCount: nodes.count,
             isGrid: isGrid,
-            columnCount: isGrid ? max(catalogGridColumnCount, 2) : 1
+            columnCount: isGrid ? max(catalogGridColumnCount, 2) : 1,
+            handlerID: catalogFocusRegistrationID
         )
-        focusCoordinator.registerCatalogActivateHandler(id: catalogFocusRegistrationID)
     }
 
     private func openFocusedCatalogItem() {
@@ -552,7 +611,12 @@ struct CatalogListView: View {
     @MainActor
     private func reloadCatalog() async {
         loadSavedWatchFilter()
-        liveLoadedNodes = nil
+        let identity = reloadIdentityKey
+        let isIdentityChange = identity != lastReloadIdentity
+        lastReloadIdentity = identity
+        if isIdentityChange {
+            liveLoadedNodes = nil
+        }
         liveLoadError = nil
         if plexServer.isDownloadsServer {
             liveLoadedNodes = OfflineDownloadCatalog.nodes(
@@ -560,6 +624,7 @@ struct CatalogListView: View {
                 library: library,
                 parent: parent
             )
+            recomputeDisplayedNodes()
             return
         }
         catalogHasMore = false
@@ -575,22 +640,29 @@ struct CatalogListView: View {
                     listFilters: listFilters,
                     offset: 0
                 )
+                guard !Task.isCancelled else { return }
                 liveLoadedNodes = page.nodes
                 catalogNextOffset = page.nextOffset
                 catalogHasMore = page.hasMore
             } else {
-                liveLoadedNodes = try await client.catalogNodes(
+                let nodes = try await client.catalogNodes(
                     library: library,
                     parent: parent,
                     watchFilter: watchFilter,
                     listFilters: listFilters
                 )
+                guard !Task.isCancelled else { return }
+                liveLoadedNodes = nodes
             }
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             liveLoadError = error.localizedDescription
             liveLoadedNodes = []
             AppToastCenter.show("Couldn’t load library: \(error.localizedDescription)")
         }
+        recomputeDisplayedNodes()
     }
 
     @MainActor
@@ -607,10 +679,15 @@ struct CatalogListView: View {
                 listFilters: listFilters,
                 offset: catalogNextOffset
             )
+            guard !Task.isCancelled else { return }
             liveLoadedNodes = (liveLoadedNodes ?? []) + page.nodes
             catalogNextOffset = page.nextOffset
             catalogHasMore = page.hasMore
+            recomputeDisplayedNodes()
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             AppToastCenter.show("Couldn't load more: \(error.localizedDescription)")
         }
     }
@@ -630,8 +707,13 @@ struct CatalogListView: View {
         }
         do {
             let client = try PlexMediaServerClient(server: plexServer)
-            availableGenres = try await client.fetchLibraryGenres(library: library)
+            let genres = try await client.fetchLibraryGenres(library: library)
+            guard !Task.isCancelled else { return }
+            availableGenres = genres
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             availableGenres = []
         }
     }
@@ -710,16 +792,21 @@ struct CatalogListView: View {
     private var catalogListModeView: some View {
         ScrollViewReader { proxy in
             List {
-                ForEach(Array(displayedNodes.enumerated()), id: \.element.id) { index, node in
+                // Iterates the pre-built indexed cache; no per-body Array
+                // allocation, and the redundant `.id(node.id)` was dropped
+                // because `ForEach` already keys by `IndexedCatalogNode.id`
+                // (which is `node.id`). Stacking an explicit `.id` on top
+                // previously forced SwiftUI to tear down rows on every
+                // filter/sort change instead of diffing them.
+                ForEach(indexedDisplayedNodes) { entry in
                     row(
-                        for: node,
+                        for: entry.node,
                         itemLibrary: library,
                         showLibraryInRow: false,
-                        catalogFocusIndex: index
+                        catalogFocusIndex: entry.index
                     )
-                    .id(node.id)
                     .onAppear {
-                        loadMoreIfNeeded(appeared: node)
+                        loadMoreIfNeeded(appeared: entry.node)
                     }
                 }
                 if catalogHasMore {
@@ -737,12 +824,11 @@ struct CatalogListView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVGrid(columns: gridColumns, spacing: 20) {
-                        ForEach(Array(displayedNodes.enumerated()), id: \.element.id) { index, node in
-                            gridCell(for: node, catalogFocusIndex: index)
+                        ForEach(indexedDisplayedNodes) { entry in
+                            gridCell(for: entry.node, catalogFocusIndex: entry.index)
                                 .padding(6)
-                                .id(node.id)
                                 .onAppear {
-                                    loadMoreIfNeeded(appeared: node)
+                                    loadMoreIfNeeded(appeared: entry.node)
                                 }
                         }
                         if catalogHasMore {
@@ -815,33 +901,16 @@ struct CatalogListView: View {
 
     @ViewBuilder
     private func gridCell(for node: PlexCatalogNode, catalogFocusIndex: Int) -> some View {
-        let isFocused = focusCoordinator.catalogFocusActive(forIndex: catalogFocusIndex)
-        NavigationLink(value: catalogRoute(for: node)) {
-            VStack(alignment: .leading, spacing: 8) {
-                CatalogArtworkImage(
-                    plexServer: plexServer,
-                    thumbPath: node.listThumbPath,
-                    artworkServer: artworkServer(for: node),
-                    style: .hubTile,
-                    watchProgressFraction: node.watchProgressFraction,
-                    showsDownloadedBadge: isDownloaded(node)
-                )
-                Text(node.listTitle)
-                    .font(.caption.weight(.medium))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .foregroundStyle(.primary)
-            }
-            .browseFocusHighlight(active: isFocused, chrome: .catalogPoster)
-        }
-        .buttonStyle(.plain)
-#if os(tvOS)
-        .tvCatalogTileFocus()
-#endif
-        .accessibilityLabel(node.listTitle)
-        .accessibilityHint("Open item")
-        .accessibilityIdentifier("catalogItem.\(catalogFocusIndex)")
+        CatalogGridTile(
+            plexServer: plexServer,
+            node: node,
+            sectionType: library.sectionType,
+            catalogFocusIndex: catalogFocusIndex,
+            isDownloaded: isDownloaded(node),
+            artworkServer: artworkServer(for: node),
+            route: catalogRoute(for: node)
+        )
+        .equatable()
     }
 
     private func isDownloaded(_ node: PlexCatalogNode) -> Bool {
@@ -918,50 +987,63 @@ struct CatalogListView: View {
         catalogFocusIndex: Int? = nil
     ) -> some View {
         let badge = showLibraryInRow ? itemLibrary.title : originServerLabel(for: node)
-        let focusRing = catalogFocusIndex.map { focusCoordinator.catalogFocusActive(forIndex: $0) } ?? false
+        // Focus state is read inside `CatalogListRowFocusOverlay` /
+        // `CatalogListRowPhotoButton` instead of here. Reading it directly in
+        // this @ViewBuilder bound the parent body to every focus tick, which
+        // invalidated *all* visible rows on every arrow-key press. The grid
+        // path was fixed earlier via `CatalogTileFocusOverlay`; list mode
+        // mirrors that pattern now.
         switch node {
-        case .show(let show):
-            NavigationLink(value: catalogRoute(for: node)) {
-                CatalogRowView(
-                    plexServer: plexServer,
-                    node: node,
-                    artworkServer: artworkServer(for: node),
-                    libraryContextTitle: badge,
-                    showsDownloadedBadge: isDownloaded(node)
-                )
-            }
-            .browseFocusHighlight(active: focusRing, chrome: .catalogListRow)
-            .accessibilityLabel(node.listTitle)
-            .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
-            .contextMenu {
-                if plexServer.isDownloadsServer,
-                   let groupKey = OfflineDownloadCatalog.showGroupKey(fromCatalogRatingKey: show.ratingKey) {
-                    Button("Delete show", role: .destructive) {
-                        requestDeleteShow(groupKey: groupKey)
+        case .show:
+            CatalogListRowFocusOverlay(focusIndex: catalogFocusIndex) {
+                NavigationLink(value: catalogRoute(for: node)) {
+                    CatalogRowView(
+                        plexServer: plexServer,
+                        node: node,
+                        artworkServer: artworkServer(for: node),
+                        libraryContextTitle: badge,
+                        showsDownloadedBadge: isDownloaded(node)
+                    )
+                    .contentShape(Rectangle())
+                    .catalogMetadataAdminContextMenu(
+                        plexServer: plexServer,
+                        node: node,
+                        sectionType: library.sectionType
+                    ) {
+                        if plexServer.isDownloadsServer,
+                           case .show(let show) = node,
+                           let groupKey = OfflineDownloadCatalog.showGroupKey(fromCatalogRatingKey: show.ratingKey) {
+                            Button("Delete show", role: .destructive) {
+                                requestDeleteShow(groupKey: groupKey)
+                            }
+                        }
                     }
                 }
             }
+            .accessibilityLabel(node.listTitle)
+            .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
         case .season(let season):
-            NavigationLink(
-                value: CatalogNavigationRoute.browse(
-                    library: itemLibrary,
-                    parent: .season(ratingKey: season.ratingKey),
-                    navigationTitle: "\(season.showTitle) · \(season.title)"
-                )
-            ) {
-                CatalogRowView(
-                    plexServer: plexServer,
-                    node: node,
-                    artworkServer: artworkServer(for: node),
-                    libraryContextTitle: badge,
-                    showsDownloadedBadge: false
-                )
+            CatalogListRowFocusOverlay(focusIndex: catalogFocusIndex) {
+                NavigationLink(
+                    value: CatalogNavigationRoute.browse(
+                        library: itemLibrary,
+                        parent: .season(ratingKey: season.ratingKey),
+                        navigationTitle: "\(season.showTitle) · \(season.title)"
+                    )
+                ) {
+                    CatalogRowView(
+                        plexServer: plexServer,
+                        node: node,
+                        artworkServer: artworkServer(for: node),
+                        libraryContextTitle: badge,
+                        showsDownloadedBadge: false
+                    )
+                }
             }
-            .browseFocusHighlight(active: focusRing, chrome: .catalogListRow)
             .accessibilityLabel(node.listTitle)
             .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
         case .photo(let photo):
-            Button {
+            CatalogListRowPhotoButton(focusIndex: catalogFocusIndex) {
                 photoSlideshowStartIndex = displayedNodes.firstIndex(where: { $0.id == node.id })
                 showPhotoSlideshow = true
             } label: {
@@ -973,19 +1055,39 @@ struct CatalogListView: View {
                     showsDownloadedBadge: false
                 )
             }
-            .browseFocusHighlight(active: focusRing, chrome: .catalogListRow)
             .accessibilityLabel(photo.title)
-        case .movie, .episode, .musicTrack:
-            NavigationLink(value: CatalogNavigationRoute.media(library: itemLibrary, node: node)) {
-                CatalogRowView(
-                    plexServer: plexServer,
-                    node: node,
-                    artworkServer: artworkServer(for: node),
-                    libraryContextTitle: badge,
-                    showsDownloadedBadge: isDownloaded(node)
-                )
+        case .movie, .episode:
+            CatalogListRowFocusOverlay(focusIndex: catalogFocusIndex) {
+                NavigationLink(value: CatalogNavigationRoute.media(library: itemLibrary, node: node)) {
+                    CatalogRowView(
+                        plexServer: plexServer,
+                        node: node,
+                        artworkServer: artworkServer(for: node),
+                        libraryContextTitle: badge,
+                        showsDownloadedBadge: isDownloaded(node)
+                    )
+                    .contentShape(Rectangle())
+                    .catalogMetadataAdminContextMenu(
+                        plexServer: plexServer,
+                        node: node,
+                        sectionType: library.sectionType
+                    )
+                }
             }
-            .browseFocusHighlight(active: focusRing, chrome: .catalogListRow)
+            .accessibilityLabel(node.listTitle)
+            .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
+        case .musicTrack:
+            CatalogListRowFocusOverlay(focusIndex: catalogFocusIndex) {
+                NavigationLink(value: CatalogNavigationRoute.media(library: itemLibrary, node: node)) {
+                    CatalogRowView(
+                        plexServer: plexServer,
+                        node: node,
+                        artworkServer: artworkServer(for: node),
+                        libraryContextTitle: badge,
+                        showsDownloadedBadge: isDownloaded(node)
+                    )
+                }
+            }
             .accessibilityLabel(node.listTitle)
             .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
         }
@@ -1125,6 +1227,113 @@ struct CatalogRowView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// A single catalog grid tile, extracted as its own view so the parent
+/// `CatalogListView` (which observes `KeyboardFocusCoordinator`) doesn't drag
+/// every cell's body through SwiftUI's diff on each focus change. The focus
+/// ring is applied in `CatalogTileFocusOverlay`, which is the only thing that
+/// observes the coordinator.
+private struct CatalogGridTile: View, Equatable {
+    let plexServer: PlexServer
+    let node: PlexCatalogNode
+    let sectionType: PlexSectionType
+    let catalogFocusIndex: Int
+    let isDownloaded: Bool
+    let artworkServer: PlexServer?
+    let route: CatalogNavigationRoute
+
+    var body: some View {
+        CatalogTileFocusOverlay(focusIndex: catalogFocusIndex, chrome: .catalogPoster) {
+            NavigationLink(value: route) {
+                VStack(alignment: .leading, spacing: 8) {
+                    CatalogArtworkImage(
+                        plexServer: plexServer,
+                        thumbPath: node.listThumbPath,
+                        artworkServer: artworkServer,
+                        style: .hubTile,
+                        watchProgressFraction: node.watchProgressFraction,
+                        showsDownloadedBadge: isDownloaded
+                    )
+                    Text(node.listTitle)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(.primary)
+                }
+                .contentShape(Rectangle())
+                .catalogMetadataAdminContextMenu(
+                    plexServer: plexServer,
+                    node: node,
+                    sectionType: sectionType
+                )
+            }
+            .buttonStyle(.plain)
+        }
+#if os(tvOS)
+        .tvCatalogTileFocus()
+#endif
+        .accessibilityLabel(node.listTitle)
+        .accessibilityHint("Open item")
+        .accessibilityIdentifier("catalogItem.\(catalogFocusIndex)")
+    }
+}
+
+/// Tiny isolation point for the focus highlight: only this subview observes
+/// `KeyboardFocusCoordinator`, so a focused-index change doesn't invalidate
+/// the entire enclosing cell.
+private struct CatalogTileFocusOverlay<Content: View>: View {
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    let focusIndex: Int
+    let chrome: BrowseFocusChrome
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .browseFocusHighlight(
+                active: focusCoordinator.catalogFocusActive(forIndex: focusIndex),
+                chrome: chrome
+            )
+    }
+}
+
+/// Cached `(index, node)` pair so `ForEach` can iterate without allocating a
+/// fresh `Array(enumerated())` on every body. Identifiable by node id so the
+/// list still diffs by stable identity across filter / sort transitions.
+private struct IndexedCatalogNode: Identifiable, Equatable {
+    let index: Int
+    let node: PlexCatalogNode
+    var id: String { node.id }
+}
+
+/// List-row equivalent of `CatalogTileFocusOverlay`. Keeps the focus-ring
+/// dependency out of `CatalogListView.row(for:)` so the parent body doesn't
+/// re-evaluate every visible row on each arrow-key focus change.
+private struct CatalogListRowFocusOverlay<Content: View>: View {
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    let focusIndex: Int?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        let active = focusIndex.map { focusCoordinator.catalogFocusActive(forIndex: $0) } ?? false
+        content().browseFocusHighlight(active: active, chrome: .catalogListRow)
+    }
+}
+
+/// Photo cells use a button style that takes `focused` up front, so they need
+/// their own focus-observing wrapper instead of `browseFocusHighlight`.
+private struct CatalogListRowPhotoButton<Label: View>: View {
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    let focusIndex: Int?
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+
+    var body: some View {
+        let active = focusIndex.map { focusCoordinator.catalogFocusActive(forIndex: $0) } ?? false
+        Button(action: action, label: label)
+            .buttonStyle(.browsePressable(focused: active, chrome: .catalogListRow))
     }
 }
 

@@ -57,7 +57,7 @@ struct PlayerChromeOverlay<TopTrailing: View, Bottom: View>: View {
                             onInteraction()
                             onSkipMarker()
                         })
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.pressableBorderedProminent)
                         .controlSize(.regular)
                         .accessibilityIdentifier("skipMarkerButton")
                     }

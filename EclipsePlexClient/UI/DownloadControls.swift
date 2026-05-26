@@ -103,17 +103,16 @@ struct DownloadControls: View {
         } label: {
             Label(label, systemImage: "play.circle")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.pressableBorderedProminent)
 #else
         NavigationLink {
             ContentView(request: request)
-                .environment(\.offlineDownloads, downloadManager)
-                .environmentObject(downloadManager)
+                .offlineDownloads(downloadManager)
                 .onAppear { dismissBrowseMenu?.dismiss() }
         } label: {
             Label(label, systemImage: "play.circle")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.pressableBorderedProminent)
 #endif
     }
 

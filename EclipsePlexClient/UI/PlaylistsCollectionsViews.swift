@@ -49,7 +49,7 @@ struct ServerPlaylistsView: View {
                                 }
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressablePlain)
                     }
                     .onDelete(perform: deletePlaylists)
                 }
@@ -153,7 +153,7 @@ struct LibraryCollectionsView: View {
                             Text(item.title)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressablePlain)
                 }
             }
         }

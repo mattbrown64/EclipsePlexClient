@@ -28,7 +28,14 @@ enum AppDiagnostics {
         for server in registry.allServers {
             let reachable = registry.serverReachable[server.id].map { $0 ? "up" : "down" } ?? "unknown"
             let host = server.hostDescription
-            lines.append("- \(server.name): \(reachable) · \(host)")
+            let caps = registry.adminCapabilities(for: server.id)
+            let adminFlags = "sessions=\(caps.canViewSessions) libs=\(caps.canManageLibraries) server=\(caps.canManageServer)"
+            if reachable == "down", let lastOnline = registry.lastOnlineAt(for: server.id) {
+                let lastOnlineText = RelativeDateTimeFormatter().localizedString(for: lastOnline, relativeTo: Date())
+                lines.append("- \(server.name): \(reachable) · last online \(lastOnlineText) · \(host) · admin[\(adminFlags)]")
+            } else {
+                lines.append("- \(server.name): \(reachable) · \(host) · admin[\(adminFlags)]")
+            }
         }
 
         let active = downloadManager.records.filter { $0.state == .downloading || $0.state == .pending }

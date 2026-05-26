@@ -11,6 +11,7 @@ struct HomeDetailView: View {
     let plexServer: PlexServer?
     let libraries: [PlexLibrary]
     var onAddPlexServer: () -> Void = {}
+    var onManageServer: () -> Void = {}
 
     @State private var continueWatching: [PlexCatalogSearchHit] = []
     @State private var recentlyAdded: [PlexCatalogSearchHit] = []
@@ -50,6 +51,11 @@ struct HomeDetailView: View {
                         Label("Search", systemImage: "magnifyingglass")
                     }
                     .accessibilityIdentifier("serverSearchButton")
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button(action: onManageServer) {
+                        Label("Server management", systemImage: "server.rack")
+                    }
                 }
             }
         }
@@ -164,7 +170,7 @@ struct HomeDetailView: View {
             } label: {
                 Label("Add Plex Server", systemImage: "plus.circle.fill")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.pressableBorderedProminent)
 
             if let plexServer, plexServer.usesLivePlexAPI {
                 Button {
@@ -172,7 +178,7 @@ struct HomeDetailView: View {
                 } label: {
                     Label("Live TV", systemImage: "antenna.radiowaves.left.and.right")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.pressableBordered)
                 if plexServer.connectionCandidates.count > 1 {
                     Text("Connection: \(plexServer.activeHostDescription)")
                         .font(.caption)
@@ -186,7 +192,7 @@ struct HomeDetailView: View {
             } label: {
                 Label("Open Video File…", systemImage: "folder")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.pressableBordered)
         }
     }
 
@@ -215,9 +221,15 @@ struct HomeDetailView: View {
             let client = try PlexMediaServerClient(server: plexServer)
             async let onDeck = client.fetchOnDeckHits(libraries: libraries)
             async let recent = client.fetchRecentlyAddedHits(libraries: libraries)
-            continueWatching = try await onDeck
-            recentlyAdded = try await recent
+            let onDeckHits = try await onDeck
+            let recentHits = try await recent
+            guard !Task.isCancelled else { return }
+            continueWatching = onDeckHits
+            recentlyAdded = recentHits
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             hubsError = error.localizedDescription
             continueWatching = []
             recentlyAdded = []

@@ -37,7 +37,7 @@ nonisolated enum PlexAccountAPI: Sendable {
     }
 
     /// Creates a sign-in PIN (`strong` tokens for third-party apps).
-    static func createPin(session: URLSession = .shared) async throws -> PinStart {
+    static func createPin(session: URLSession = PlexNetworking.session) async throws -> PinStart {
         let cid = PlexHTTPConstants.clientIdentifier
         guard let url = URL(string: "https://plex.tv/api/v2/pins.json?strong=true") else {
             throw PlexAPIError.invalidURL
@@ -59,7 +59,7 @@ nonisolated enum PlexAccountAPI: Sendable {
     }
 
     /// `authToken` when the user has finished signing in; `nil` if still pending.
-    static func pinStatus(pinId: Int, session: URLSession = .shared) async throws -> String? {
+    static func pinStatus(pinId: Int, session: URLSession = PlexNetworking.session) async throws -> String? {
         let cid = PlexHTTPConstants.clientIdentifier
         guard let url = URL(string: "https://plex.tv/api/v2/pins/\(pinId)") else {
             throw PlexAPIError.invalidURL
@@ -80,7 +80,7 @@ nonisolated enum PlexAccountAPI: Sendable {
     }
 
     /// Poll until `authToken` appears or `timeoutSeconds` elapses.
-    static func pollForAccountToken(pinId: Int, pollIntervalNanoseconds: UInt64 = 1_000_000_000, timeoutSeconds: Int = 240, session: URLSession = .shared) async throws -> String {
+    static func pollForAccountToken(pinId: Int, pollIntervalNanoseconds: UInt64 = 1_000_000_000, timeoutSeconds: Int = 240, session: URLSession = PlexNetworking.session) async throws -> String {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline {
             try Task.checkCancellation()
@@ -95,7 +95,7 @@ nonisolated enum PlexAccountAPI: Sendable {
     // MARK: - Resources → PlexServer
 
     /// Media Servers visible to this Plex account (owned and shared).
-    static func fetchMediaServers(accountToken: String, session: URLSession = .shared) async throws -> [PlexServer] {
+    static func fetchMediaServers(accountToken: String, session: URLSession = PlexNetworking.session) async throws -> [PlexServer] {
         let cid = PlexHTTPConstants.clientIdentifier
         guard var components = URLComponents(string: "https://plex.tv/api/v2/resources") else {
             throw PlexAPIError.invalidURL
@@ -119,10 +119,22 @@ nonisolated enum PlexAccountAPI: Sendable {
         }
 
         let devices = try decodeResourceList(from: data)
+        // Probing each device's connections in parallel (bounded) instead of
+        // serially makes account refresh dramatically faster when the user has
+        // several servers, especially when some are unreachable on this network.
+        let maxConcurrency = 4
         var servers: [PlexServer] = []
-        for d in devices {
-            if let s = await mapResourceToReachableServer(d, session: session) {
-                servers.append(s)
+        await withTaskGroup(of: PlexServer?.self) { group in
+            var iterator = devices.makeIterator()
+            for _ in 0 ..< min(maxConcurrency, devices.count) {
+                guard let next = iterator.next() else { break }
+                group.addTask { await mapResourceToReachableServer(next, session: session) }
+            }
+            while let result = await group.next() {
+                if let resolved = result { servers.append(resolved) }
+                if let next = iterator.next() {
+                    group.addTask { await mapResourceToReachableServer(next, session: session) }
+                }
             }
         }
         return servers
@@ -177,7 +189,8 @@ nonisolated enum PlexAccountAPI: Sendable {
                 name: name,
                 hostDescription: entry.url,
                 accessToken: access,
-                plexResourceClientIdentifier: rid
+                plexResourceClientIdentifier: rid,
+                isOwnedServer: d.ownedBool
             )
             guard server.usesLivePlexAPI else { continue }
             do {
@@ -341,10 +354,12 @@ private nonisolated struct PlexResourceDeviceDTO: Decodable {
     let provides: String?
     let clientIdentifier: String?
     let accessToken: String?
+    let owned: PlexFlexibleBoolInt?
     let httpsRequired: PlexFlexibleBoolInt?
     let connections: [PlexResourceConnectionDTO]?
 
     var httpsRequiredBool: Bool { httpsRequired?.truth ?? false }
+    var ownedBool: Bool { owned?.truth ?? false }
 }
 
 private nonisolated struct PlexResourceConnectionDTO: Decodable {

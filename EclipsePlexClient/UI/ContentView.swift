@@ -81,7 +81,7 @@ struct ContentView: View {
                 Text(message)
             }
             Button("Exit", action: { dismiss() })
-                .buttonStyle(.bordered)
+                .buttonStyle(.pressableBordered)
         }
     }
 
@@ -456,7 +456,7 @@ private struct VideoPlaybackView: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
                 Button("Exit", action: exitPlayback)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.pressableBordered)
             }
             .padding()
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -527,11 +527,11 @@ private struct VideoPlaybackView: View {
                         cancelPlayNextCountdown()
                         isPlayNextOverlayVisible = false
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.pressableBordered)
                     Button("Play now") {
                         Task { await playNextManually() }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.pressableBorderedProminent)
                 }
             }
             .padding(20)

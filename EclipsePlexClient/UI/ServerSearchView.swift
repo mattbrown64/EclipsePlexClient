@@ -16,6 +16,10 @@ struct ServerSearchView: View {
     @State private var results: [PlexCatalogSearchHit] = []
     @State private var isSearching = false
     @State private var searchError: String?
+    /// In-flight server search. Held so a new submission (or view disappear)
+    /// can cancel the previous request and avoid blocking the UI / wasting
+    /// a slot in the per-host connection pool.
+    @State private var activeSearchTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -62,18 +66,31 @@ struct ServerSearchView: View {
                 }
             }
             .onSubmit(of: .search) {
-                Task { await runSearch() }
+                startSearch()
             }
             .onChange(of: query) { _, newValue in
                 if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    activeSearchTask?.cancel()
+                    activeSearchTask = nil
                     results = []
                     searchError = nil
                 }
+            }
+            .onDisappear {
+                activeSearchTask?.cancel()
+                activeSearchTask = nil
             }
         }
         #if os(macOS)
         .frame(minWidth: 480, minHeight: 400)
         #endif
+    }
+
+    private func startSearch() {
+        activeSearchTask?.cancel()
+        activeSearchTask = Task { @MainActor in
+            await runSearch()
+        }
     }
 
     @ViewBuilder
@@ -105,8 +122,15 @@ struct ServerSearchView: View {
         defer { isSearching = false }
         do {
             let client = try PlexMediaServerClient(server: plexServer)
-            results = try await client.searchCatalog(query: trimmed, libraries: libraries)
+            let hits = try await client.searchCatalog(query: trimmed, libraries: libraries)
+            // If a newer search superseded this one (or view went away), bail
+            // without overwriting state.
+            guard !Task.isCancelled else { return }
+            results = hits
+        } catch is CancellationError {
+            // Superseded by a newer query; leave state untouched.
         } catch {
+            guard !Task.isCancelled else { return }
             searchError = error.localizedDescription
             results = []
         }

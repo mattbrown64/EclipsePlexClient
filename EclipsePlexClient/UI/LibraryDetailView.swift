@@ -96,12 +96,23 @@ struct LibraryDetailView: View {
         }
     }
 
+    /// Avoid same-frame `focusCoordinator.route` flips that previously fired
+    /// the SwiftUI "onChange(of: AppFocusRoute) action tried to update multiple
+    /// times per frame" warning during library selection. RootShellView already
+    /// sets the route during `selectLibrary`, then this view's `onAppear` ran
+    /// in the same pass — re-writing the route inline caused observers
+    /// (notably `AppSidebarView`) to fire mid-update. Skip when the coordinator
+    /// is already on the right pane, and otherwise defer to the next runloop.
     private func adoptFocus(for tab: LibraryRootTab) {
-        switch tab {
-        case .recommended:
-            focusCoordinator.focusHome()
-        case .browse, .collections:
-            focusCoordinator.focusCatalog()
+        let target: AppFocusRoute = (tab == .recommended) ? .homeHubs : .catalogList
+        guard focusCoordinator.route != target else { return }
+        DispatchQueue.main.async {
+            switch tab {
+            case .recommended:
+                focusCoordinator.focusHome()
+            case .browse, .collections:
+                focusCoordinator.focusCatalog()
+            }
         }
     }
 }

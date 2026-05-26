@@ -4,6 +4,9 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import UserNotifications
+#endif
 
 struct SettingsView: View {
     @ObservedObject var registry: PlexServerRegistry
@@ -12,6 +15,12 @@ struct SettingsView: View {
     @State private var defaultPlaybackSpeed: Float = PlaybackPreferences.loadPlaybackRate()
     @State private var downloadWifiOnly: Bool = OfflineDownloadPreferences.wifiOnly
     @State private var defaultDownloadQuality: PlaybackVideoResolution = OfflineDownloadPreferences.defaultQuality
+    @State private var notificationsEnabled: Bool = OfflineDownloadPreferences.notificationsEnabled
+    @State private var notifyOnSuccess: Bool = OfflineDownloadPreferences.notifyOnSuccess
+    @State private var notifyOnFailure: Bool = OfflineDownloadPreferences.notifyOnFailure
+#if os(iOS)
+    @State private var downloadNotificationStatus: UNAuthorizationStatus = .notDetermined
+#endif
     @State private var defaultVideoResolution: PlaybackVideoResolution = PlaybackPreferences.load().videoResolution
     @State private var preferDirectPlayLAN: Bool = PlaybackPreferences.preferDirectPlayOnLAN
     @State private var preferHLS: Bool = PlaybackPreferences.preferHLSTranscode
@@ -76,6 +85,33 @@ struct SettingsView: View {
                 .onChange(of: defaultDownloadQuality) { _, value in
                     OfflineDownloadPreferences.defaultQuality = value
                 }
+#if os(iOS)
+                Toggle("Download notifications", isOn: $notificationsEnabled)
+                    .onChange(of: notificationsEnabled) { _, value in
+                        OfflineDownloadPreferences.notificationsEnabled = value
+                        if value {
+                            Task {
+                                _ = await OfflineDownloadNotifications.requestAuthorizationIfNeeded()
+                                downloadNotificationStatus = await OfflineDownloadNotifications.authorizationStatus()
+                            }
+                        }
+                    }
+                Toggle("Notify on completion", isOn: $notifyOnSuccess)
+                    .onChange(of: notifyOnSuccess) { _, value in
+                        OfflineDownloadPreferences.notifyOnSuccess = value
+                    }
+                    .disabled(!notificationsEnabled)
+                Toggle("Notify on failure", isOn: $notifyOnFailure)
+                    .onChange(of: notifyOnFailure) { _, value in
+                        OfflineDownloadPreferences.notifyOnFailure = value
+                    }
+                    .disabled(!notificationsEnabled)
+                if downloadNotificationStatus == .denied {
+                    Text("Notifications are denied for EclipsePlex. Enable notifications in iOS Settings to receive download alerts.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+#endif
                 LabeledContent("Storage used") {
                     Text(ByteCountFormatter.string(fromByteCount: downloadManager.totalDownloadBytes, countStyle: .file))
                 }
@@ -87,7 +123,7 @@ struct SettingsView: View {
                 }
                 NavigationLink {
                     DownloadsHomeDetailView()
-                        .environmentObject(downloadManager)
+                        .offlineDownloads(downloadManager)
                 } label: {
                     Label("Manage downloads", systemImage: "arrow.down.circle")
                 }
@@ -137,6 +173,11 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+#if os(iOS)
+        .task {
+            downloadNotificationStatus = await OfflineDownloadNotifications.authorizationStatus()
+        }
+#endif
         .sheet(isPresented: $showAddServer) {
             AddPlexServerSheet(registry: registry)
         }

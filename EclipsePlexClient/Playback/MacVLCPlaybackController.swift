@@ -14,11 +14,28 @@ struct VLCMediaStreamTrack: Identifiable, Equatable {
 typealias VLCSubtitleTrack = VLCMediaStreamTrack
 typealias VLCAudioTrack = VLCMediaStreamTrack
 
+/// High-frequency position updates for the Mac transport bar.
+///
+/// Lives on its own `ObservableObject` so that the per-tick position publishes
+/// (≈2 Hz during playback) don't re-render every consumer of
+/// `MacVLCPlaybackController`. Only the progress row subview subscribes here.
+@MainActor
+final class MacVLCPositionTracker: ObservableObject {
+    @Published fileprivate(set) var positionMs = 0
+    @Published fileprivate(set) var durationMs = 0
+
+    var formattedPosition: String { MacVLCPlaybackController.format(ms: positionMs) }
+    var formattedDuration: String { MacVLCPlaybackController.format(ms: durationMs) }
+}
+
 /// Drives SwiftUI transport controls for `MacVLCPlayerView`.
 @MainActor
 final class MacVLCPlaybackController: ObservableObject {
-    @Published private(set) var positionMs = 0
-    @Published private(set) var durationMs = 0
+    /// Position/duration are published from a dedicated tracker so the rest of
+    /// the transport bar (buttons, menus, volume) doesn't re-render twice a
+    /// second during playback.
+    let positionTracker = MacVLCPositionTracker()
+
     @Published private(set) var isPlaying = false
     @Published var volume = 100
     @Published var isMuted = false
@@ -33,8 +50,17 @@ final class MacVLCPlaybackController: ObservableObject {
 
     weak var player: VLCMediaPlayer?
 
-    var formattedPosition: String { Self.format(ms: positionMs) }
-    var formattedDuration: String { Self.format(ms: durationMs) }
+    var positionMs: Int { positionTracker.positionMs }
+    var durationMs: Int { positionTracker.durationMs }
+
+    var formattedPosition: String { positionTracker.formattedPosition }
+    var formattedDuration: String { positionTracker.formattedDuration }
+
+    /// Cheap fingerprint of the VLC track lists used to avoid re-bridging the
+    /// Obj-C arrays on every applySync. Recomputed only when VLC reports a
+    /// change to track count / current index.
+    private var lastSubtitleSignature: String?
+    private var lastAudioSignature: String?
 
     var formattedVideoResolution: String {
         if videoDisplaySize.width > 0, videoDisplaySize.height > 0 {
@@ -82,21 +108,22 @@ final class MacVLCPlaybackController: ObservableObject {
 
     func seek(toMs: Int) {
         guard let player else { return }
-        let cap = durationMs > 0 ? durationMs : max(toMs, 0)
+        let duration = positionTracker.durationMs
+        let cap = duration > 0 ? duration : max(toMs, 0)
         let clamped = max(0, min(toMs, cap))
         player.time = VLCTime(number: clamped as NSNumber)
-        if durationMs > 0 {
-            let fraction = Float(clamped) / Float(durationMs)
+        if duration > 0 {
+            let fraction = Float(clamped) / Float(duration)
             player.position = min(1, max(0, fraction))
         }
-        positionMs = clamped
+        positionTracker.positionMs = clamped
         if !player.isPlaying, player.state != .playing {
             player.play()
         }
     }
 
     func skip(by seconds: Int) {
-        seek(toMs: positionMs + seconds * 1_000)
+        seek(toMs: positionTracker.positionMs + seconds * 1_000)
     }
 
     func setVolume(_ value: Int) {
@@ -139,13 +166,13 @@ final class MacVLCPlaybackController: ObservableObject {
         self.player = player
 
         let newPosition = Int(player.time.intValue)
-        if newPosition != positionMs {
-            positionMs = newPosition
+        if newPosition != positionTracker.positionMs {
+            positionTracker.positionMs = newPosition
         }
 
         let newDuration = Int(player.media?.length.intValue ?? 0)
-        if newDuration != durationMs {
-            durationMs = newDuration
+        if newDuration != positionTracker.durationMs {
+            positionTracker.durationMs = newDuration
         }
 
         let newIsPlaying = player.isPlaying
@@ -165,7 +192,26 @@ final class MacVLCPlaybackController: ObservableObject {
             videoDisplaySize = size
         }
 
+        refreshSubtitleTracksIfChanged(from: player)
+        refreshAudioTracksIfChanged(from: player)
+    }
+
+    /// Re-bridges VLC's Obj-C track arrays only when a cheap fingerprint
+    /// (count + current index) tells us something changed. Previously this ran
+    /// every applySync (~2 Hz), allocating new Swift arrays each tick.
+    private func refreshSubtitleTracksIfChanged(from player: VLCMediaPlayer) {
+        let currentIndex = Int(player.currentVideoSubTitleIndex)
+        let signature = "\(player.numberOfSubtitlesTracks)|\(currentIndex)"
+        guard signature != lastSubtitleSignature else { return }
+        lastSubtitleSignature = signature
         refreshSubtitleTracks(from: player)
+    }
+
+    private func refreshAudioTracksIfChanged(from player: VLCMediaPlayer) {
+        let currentIndex = Int(player.currentAudioTrackIndex)
+        let signature = "\(player.numberOfAudioTracks)|\(currentIndex)"
+        guard signature != lastAudioSignature else { return }
+        lastAudioSignature = signature
         refreshAudioTracks(from: player)
     }
 
@@ -220,7 +266,7 @@ final class MacVLCPlaybackController: ObservableObject {
         }
     }
 
-    private static func format(ms: Int) -> String {
+    static func format(ms: Int) -> String {
         guard ms > 0 else { return "0:00" }
         let totalSeconds = ms / 1000
         let hours = totalSeconds / 3600

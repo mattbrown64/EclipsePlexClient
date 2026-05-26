@@ -42,7 +42,11 @@ struct LibraryRecommendedView: View {
                 ScrollViewReader { scrollProxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
-                            ForEach(Array(shelves.enumerated()), id: \.element.id) { shelfIndex, shelf in
+                            // Avoid the per-body `Array(shelves.enumerated())`
+                            // allocation; shelves are stable in identity over
+                            // the view's lifetime so indexed iteration is safe.
+                            ForEach(shelves.indices, id: \.self) { shelfIndex in
+                                let shelf = shelves[shelfIndex]
                                 HubRowView(
                                     title: shelf.title,
                                     hits: shelf.hits,

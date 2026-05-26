@@ -9,6 +9,11 @@ import Foundation
 /// Persisted user-added Plex servers and cached `/library/sections` for live (token + URL) servers.
 @MainActor
 final class PlexServerRegistry: ObservableObject {
+    struct ReachabilitySnapshot: Codable {
+        var lastOnlineAt: Date?
+        var lastOfflineAt: Date?
+    }
+
     @Published private(set) var customServers: [PlexServer] = []
     @Published private(set) var librariesByServerID: [UUID: [PlexLibrary]] = [:]
     @Published var librariesLoadError: String?
@@ -16,20 +21,78 @@ final class PlexServerRegistry: ObservableObject {
     @Published private(set) var librariesLoadingServerID: UUID?
     /// Last reachability probe per server (`nil` = unknown).
     @Published private(set) var serverReachable: [UUID: Bool] = [:]
+    @Published private(set) var serverReachabilityHistory: [UUID: ReachabilitySnapshot] = [:]
+    @Published private(set) var serverAdminCapabilities: [UUID: PlexServerAdminCapabilities] = [:]
 
     func setServerReachable(_ reachable: Bool?, for serverID: UUID) {
         serverReachable[serverID] = reachable
+        guard let reachable else { return }
+        var snapshot = serverReachabilityHistory[serverID] ?? ReachabilitySnapshot()
+        if reachable {
+            snapshot.lastOnlineAt = Date()
+        } else {
+            snapshot.lastOfflineAt = Date()
+        }
+        serverReachabilityHistory[serverID] = snapshot
+        saveReachabilityHistory()
+    }
+
+    func lastOnlineAt(for serverID: UUID) -> Date? {
+        serverReachabilityHistory[serverID]?.lastOnlineAt
+    }
+
+    func setAdminCapabilities(_ capabilities: PlexServerAdminCapabilities, for serverID: UUID) {
+        serverAdminCapabilities[serverID] = capabilities
+    }
+
+    func clearAdminCapabilities(for serverID: UUID) {
+        serverAdminCapabilities[serverID] = nil
     }
 
     /// Plex.tv account token (PIN sign-in). Used only to refresh the server list, not for PMS calls.
     @Published private(set) var plexAccountAuthToken: String?
 
     private let userDefaultsKey = "plexCustomServers.v1"
+    private let reachabilityHistoryKey = "plexServerReachabilityHistory.v1"
+
+    /// Per-server timestamps used to skip redundant probes when the UI re-runs
+    /// `.task` blocks during normal navigation. Force-refresh bypasses these.
+    private var lastReachabilityProbeAt: [UUID: Date] = [:]
+    private var lastLibraryRefreshAt: [UUID: Date] = [:]
+    static let reachabilityTTL: TimeInterval = 60
+    static let libraryTTL: TimeInterval = 120
+
+    func reachabilityCacheIsFresh(for serverID: UUID) -> Bool {
+        guard let last = lastReachabilityProbeAt[serverID] else { return false }
+        return Date().timeIntervalSince(last) < Self.reachabilityTTL
+    }
+
+    func recordReachabilityProbe(for serverID: UUID) {
+        lastReachabilityProbeAt[serverID] = Date()
+    }
+
+    func libraryCacheIsFresh(for serverID: UUID) -> Bool {
+        guard let last = lastLibraryRefreshAt[serverID] else { return false }
+        return Date().timeIntervalSince(last) < Self.libraryTTL
+    }
+
+    func recordLibraryRefresh(for serverID: UUID) {
+        lastLibraryRefreshAt[serverID] = Date()
+    }
+
+    func invalidateLibraryCache(for serverID: UUID? = nil) {
+        if let serverID {
+            lastLibraryRefreshAt[serverID] = nil
+        } else {
+            lastLibraryRefreshAt.removeAll()
+        }
+    }
 
     init() {
         KeychainStore.migrateFromUserDefaultsIfNeeded()
         plexAccountAuthToken = KeychainStore.loadPlexAccountToken()
         loadFromDisk()
+        loadReachabilityHistory()
         applyUITestLaunchArgumentsIfNeeded()
     }
 
@@ -84,14 +147,18 @@ final class PlexServerRegistry: ObservableObject {
         customServers.removeAll { $0.id == id }
         KeychainStore.setToken(nil, forServerID: id)
         librariesByServerID[id] = nil
+        serverReachable[id] = nil
+        serverReachabilityHistory[id] = nil
+        clearAdminCapabilities(for: id)
         if librariesLoadErrorServerID == id {
             librariesLoadError = nil
             librariesLoadErrorServerID = nil
         }
         saveToDisk()
+        saveReachabilityHistory()
     }
 
-    func refreshLibraries(for server: PlexServer) async {
+    func refreshLibraries(for server: PlexServer, force: Bool = false) async {
         let server = server.withTokenFromKeychain()
         guard server.usesLivePlexAPI else {
             librariesByServerID[server.id] = nil
@@ -99,6 +166,12 @@ final class PlexServerRegistry: ObservableObject {
                 librariesLoadError = nil
                 librariesLoadErrorServerID = nil
             }
+            return
+        }
+        if !force,
+           libraryCacheIsFresh(for: server.id),
+           let existing = librariesByServerID[server.id],
+           !existing.isEmpty {
             return
         }
         librariesLoadingServerID = server.id
@@ -109,12 +182,14 @@ final class PlexServerRegistry: ObservableObject {
             let client = try PlexMediaServerClient(server: server)
             let libs = try await client.fetchLibraries(serverId: server.id)
             librariesByServerID[server.id] = libs
+            recordLibraryRefresh(for: server.id)
         } catch let firstError {
             if let repaired = await refreshDiscoveredServerConnection(serverId: server.id) {
                 do {
                     let client = try PlexMediaServerClient(server: repaired)
                     let libs = try await client.fetchLibraries(serverId: repaired.id)
                     librariesByServerID[repaired.id] = libs
+                    recordLibraryRefresh(for: repaired.id)
                     librariesLoadError = nil
                     librariesLoadErrorServerID = nil
                     return
@@ -131,6 +206,27 @@ final class PlexServerRegistry: ObservableObject {
         }
     }
 
+    /// Refreshes multiple servers' library lists in parallel with bounded
+    /// concurrency. Used by aggregate home / root shell launch paths to avoid
+    /// the serial N-server wait the audit flagged.
+    func refreshLibraries(for servers: [PlexServer], force: Bool = false) async {
+        let live = servers.filter(\.usesLivePlexAPI)
+        guard !live.isEmpty else { return }
+        let maxConcurrency = 4
+
+        await withTaskGroup(of: Void.self) { group in
+            var iterator = live.makeIterator()
+            for _ in 0 ..< min(maxConcurrency, live.count) {
+                guard let next = iterator.next() else { break }
+                group.addTask { await self.refreshLibraries(for: next, force: force) }
+            }
+            while await group.next() != nil {
+                guard let next = iterator.next() else { continue }
+                group.addTask { await self.refreshLibraries(for: next, force: force) }
+            }
+        }
+    }
+
     /// For servers added via Plex account, try resources again to get a working URL (fixes bad DNS / stale connection).
     func refreshDiscoveredServerConnection(serverId: UUID) async -> PlexServer? {
         guard let token = plexAccountAuthToken, !token.isEmpty else { return nil }
@@ -144,6 +240,9 @@ final class PlexServerRegistry: ObservableObject {
             persistToken(match.accessToken, for: customServers[idx].id)
             if !match.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 customServers[idx].name = match.name
+            }
+            if let owned = match.isOwnedServer {
+                customServers[idx].isOwnedServer = owned
             }
             saveToDisk()
             return customServers[idx].withTokenFromKeychain()
@@ -174,5 +273,17 @@ final class PlexServerRegistry: ObservableObject {
         } else {
             KeychainStore.setToken(nil, forServerID: serverID)
         }
+    }
+
+    private func loadReachabilityHistory() {
+        guard let data = UserDefaults.standard.data(forKey: reachabilityHistoryKey),
+              let decoded = try? JSONDecoder().decode([UUID: ReachabilitySnapshot].self, from: data)
+        else { return }
+        serverReachabilityHistory = decoded
+    }
+
+    private func saveReachabilityHistory() {
+        guard let data = try? JSONEncoder().encode(serverReachabilityHistory) else { return }
+        UserDefaults.standard.set(data, forKey: reachabilityHistoryKey)
     }
 }

@@ -40,7 +40,13 @@ struct CatalogArtworkImage: View {
     var showsDownloadedBadge: Bool = false
 
     private var url: URL? {
-        (artworkServer ?? plexServer).catalogArtworkURL(relativeThumbPath: thumbPath)
+        let s = style.size
+        // Ask Plex to resize on the server — list/hub tiles never need a 1080×1620 JPEG.
+        let target = CGSize(width: s.width * 2, height: s.height * 2)
+        return (artworkServer ?? plexServer).catalogArtworkURL(
+            relativeThumbPath: thumbPath,
+            targetPixelSize: target
+        )
     }
 
     var body: some View {

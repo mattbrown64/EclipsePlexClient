@@ -39,16 +39,16 @@ extension View {
     }
 }
 
-#if os(iOS)
+#if os(iOS) || os(tvOS)
 /// Forwards environment objects into the playback full-screen cover.
-private struct PlaybackCoverHost: View {
+struct PlaybackCoverHost: View {
     let request: PlaybackRequest
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
 
     var body: some View {
         ContentView(request: request)
-            .environmentObject(downloadManager)
+            .offlineDownloads(downloadManager)
             .environmentObject(focusCoordinator)
     }
 }

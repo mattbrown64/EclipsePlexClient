@@ -38,7 +38,7 @@ extension PlexMediaServerClient {
             throw PlexAPIError.httpStatus(code: http.statusCode, bodySnippet: snippet)
         }
         do {
-            let root = try JSONDecoder().decode(PlexHubsRoot.self, from: data)
+            let root = try PlexNetworking.jsonDecoder.decode(PlexHubsRoot.self, from: data)
             return root.MediaContainer.hubDTOs
         } catch {
             throw PlexAPIError.decodingFailed("Could not read Plex hubs (\(error.localizedDescription)).")

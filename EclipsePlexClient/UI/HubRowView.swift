@@ -30,8 +30,14 @@ struct HubRowView: View {
                     .font(.headline)
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 14) {
-                            ForEach(Array(hits.enumerated()), id: \.element.id) { localIndex, hit in
+                        LazyHStack(spacing: 14) {
+                            // Iterate indices instead of `Array(hits.enumerated())`
+                            // — the previous form allocated a fresh array on every
+                            // parent body pass (which is amplified by focus ticks
+                            // because the button's `buttonStyle(.browsePressable)`
+                            // reads `focusCoordinator.homeFocusActive`).
+                            ForEach(hits.indices, id: \.self) { localIndex in
+                                let hit = hits[localIndex]
                                 let globalIndex = homeFocusRangeStart + localIndex
                                 let focusID = HomeHubFocus.focusID(shelfKey: shelfKey, hit: hit)
                                 Button {
@@ -42,12 +48,13 @@ struct HubRowView: View {
                                     catalogNavigation.pushRoute(HomeHubFocus.hubRoute(for: hit))
                                 } label: {
                                     HubTileView(plexServer: plexServer, hit: hit)
-                                        .browseFocusHighlight(
-                                            active: focusCoordinator.homeFocusActive(forIndex: globalIndex),
-                                            chrome: .catalogPoster
-                                        )
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(
+                                    .browsePressable(
+                                        focused: focusCoordinator.homeFocusActive(forIndex: globalIndex),
+                                        chrome: .catalogPoster
+                                    )
+                                )
 #if os(tvOS)
                                 .tvCatalogTileFocus()
 #endif
@@ -68,13 +75,14 @@ struct HubRowView: View {
         }
     }
 
+    /// Fast path: every shelf's `onChange(of: homeFocusedIndex)` fires on every
+    /// focus tick. Bail as cheaply as possible when the focus belongs to a
+    /// different shelf so the N-shelf fanout doesn't bog navigation down. Only
+    /// the owning shelf reaches the `scrollTo` call.
     private func scrollHomeFocus(to index: Int, proxy: ScrollViewProxy) {
-        guard focusCoordinator.route == .homeHubs,
-              index >= homeFocusRangeStart,
-              index < homeFocusRangeStart + hits.count
-        else { return }
+        guard focusCoordinator.route == .homeHubs else { return }
         let localIndex = index - homeFocusRangeStart
-        guard hits.indices.contains(localIndex) else { return }
+        guard localIndex >= 0, localIndex < hits.count else { return }
         let focusID = HomeHubFocus.focusID(shelfKey: shelfKey, hit: hits[localIndex])
         withAnimation(.easeInOut(duration: 0.2)) {
             proxy.scrollTo(focusID, anchor: .center)

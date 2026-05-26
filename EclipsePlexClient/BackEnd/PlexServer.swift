@@ -16,19 +16,23 @@ nonisolated struct PlexServer: Identifiable, Hashable, Sendable, Codable {
     var accessToken: String?
     /// Plex.tv resource id from account discovery; used to dedupe when re-adding the same server.
     var plexResourceClientIdentifier: String?
+    /// When discovered via Plex account, whether this server is owned by the signed-in user.
+    var isOwnedServer: Bool?
 
     init(
         id: UUID = UUID(),
         name: String,
         hostDescription: String,
         accessToken: String? = nil,
-        plexResourceClientIdentifier: String? = nil
+        plexResourceClientIdentifier: String? = nil,
+        isOwnedServer: Bool? = nil
     ) {
         self.id = id
         self.name = name
         self.hostDescription = hostDescription
         self.accessToken = accessToken
         self.plexResourceClientIdentifier = plexResourceClientIdentifier
+        self.isOwnedServer = isOwnedServer
     }
 
     /// Live Plex Media Server JSON API when we have an origin URL and a non-empty token.

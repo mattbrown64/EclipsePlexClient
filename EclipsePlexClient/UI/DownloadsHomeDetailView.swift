@@ -110,7 +110,7 @@ struct DownloadsHomeDetailView: View {
                                 pendingDeleteShowTitle = show.title
                                 showDeleteShowConfirm = true
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.pressableBordered)
                             .controlSize(.small)
                         }
                     }
@@ -163,10 +163,7 @@ private struct DownloadQueueRowView: View {
             Text("From \(record.serverName)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            DownloadTransferStatusView(
-                record: record,
-                speedBytesPerSecond: downloadManager.transferSpeed(for: record.id)
-            )
+            DownloadTransferStatusView(record: record)
             if let error = record.errorMessage {
                 Text(error)
                     .font(.caption)

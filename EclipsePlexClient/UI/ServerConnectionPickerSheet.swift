@@ -48,7 +48,7 @@ struct ServerConnectionPickerSheet: View {
                             }
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressablePlain)
                 }
             }
             .navigationTitle("Connection")

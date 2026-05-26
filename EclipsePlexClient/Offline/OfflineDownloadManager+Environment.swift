@@ -20,5 +20,6 @@ extension View {
     func offlineDownloads(_ manager: OfflineDownloadManager) -> some View {
         environment(\.offlineDownloads, manager)
             .environmentObject(manager)
+            .environmentObject(manager.progressStore)
     }
 }

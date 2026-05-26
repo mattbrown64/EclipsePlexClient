@@ -24,8 +24,15 @@ struct RootShellView: View {
     @State private var didOfferAddServerOnLaunch = false
     @State private var serverToEdit: PlexServer?
     @State private var connectionPickerServer: PlexServer?
+    @State private var serverManagementServer: PlexServer?
     @State private var catalogPath = NavigationPath()
     @State private var detailLoadingMessage: String?
+    /// Set synchronously on library tap so the sidebar can show a spinner before
+    /// the detail column finishes switching (especially on iPhone where the
+    /// browse overlay covers the detail loading banner for ~250 ms).
+    @State private var pendingLibraryID: String?
+    @State private var detailLoadingTimeoutTask: Task<Void, Never>?
+    @State private var detailLoadingCompleteTask: Task<Void, Never>?
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -113,6 +120,10 @@ struct RootShellView: View {
             }
             .onChange(of: selectedLibraryIdString) { _, _ in
                 adoptDetailKeyboardFocusIfNeeded()
+                completeLibraryNavigationIfReady()
+            }
+            .onChange(of: libraryNavigationReadyKey) { _, _ in
+                completeLibraryNavigationIfReady()
             }
             .onChange(of: selectedServerIdString) { _, _ in
                 adoptDetailKeyboardFocusIfNeeded()
@@ -164,10 +175,13 @@ struct RootShellView: View {
             .sheet(item: $connectionPickerServer) { server in
                 ServerConnectionPickerSheet(server: server, registry: plexRegistry)
             }
+            .sheet(item: $serverManagementServer) { server in
+                ServerManagementView(registry: plexRegistry, server: server)
+            }
             .sheet(isPresented: $showSettings) {
                 NavigationStack {
                     SettingsView(registry: plexRegistry)
-                        .environmentObject(downloadManager)
+                        .offlineDownloads(downloadManager)
                 }
             }
             .sheet(isPresented: $showServerSearch) {
@@ -204,8 +218,8 @@ struct RootShellView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
+                    OfflineScrobbleQueue.scheduleFlush(servers: plexRegistry.allServers)
                     Task {
-                        await OfflineScrobbleQueue.flush(servers: plexRegistry.allServers)
                         await downloadManager.pumpQueueIfAllowed()
                     }
                 }
@@ -251,6 +265,15 @@ struct RootShellView: View {
                 browseOverlayPanel
                     .transition(.move(edge: .leading))
                     .zIndex(2)
+            }
+
+            // During library navigation the detail-column loading banner sits
+            // underneath the browse sheet. Mirror it above the sheet so the
+            // user gets immediate feedback that the tap registered.
+            if pendingLibraryID != nil, let message = detailLoadingMessage {
+                detailLoadingBanner(message: message)
+                    .zIndex(3)
+                    .transition(.opacity)
             }
         }
     }
@@ -328,16 +351,19 @@ struct RootShellView: View {
                 set: { setSelectedServerID($0) }
             ),
             selectedLibraryID: selectedLibraryIDBinding,
+            pendingLibraryID: pendingLibraryID,
             isLoadingLibraries: plexRegistry.librariesLoadingServerID == selectedPlexServer?.id,
             librariesLoadError: plexRegistry.librariesLoadError,
             showsLibrariesError: plexRegistry.librariesLoadErrorServerID == selectedPlexServer?.id,
             isUserAddedServer: { plexRegistry.isUserAddedServer(id: $0) },
             serverReachable: { plexRegistry.serverReachable[$0] },
+            serverLastOnlineAt: { plexRegistry.lastOnlineAt(for: $0) },
             onSelectServer: { selectServer($0) },
             onSelectHome: { selectHome() },
             onSelectPlaylists: { selectPlaylists() },
             onSelectLibrary: { selectLibrary($0) },
             onEditServer: { serverToEdit = $0 },
+            onManageServer: { serverManagementServer = $0 },
             onRemoveServer: { id in
                 guard id != PlexServer.downloadsServerID else { return }
                 plexRegistry.removeCustomServer(id: id)
@@ -388,7 +414,8 @@ struct RootShellView: View {
                         HomeDetailView(
                             plexServer: server,
                             libraries: librariesForSelectedServer,
-                            onAddPlexServer: { showAddPlexServer = true }
+                            onAddPlexServer: { showAddPlexServer = true },
+                            onManageServer: { serverManagementServer = server }
                         )
                         .onAppear { adoptDetailKeyboardFocusIfNeeded() }
                     } else {
@@ -437,23 +464,28 @@ struct RootShellView: View {
             }
 
             if let message = detailLoadingMessage {
-                VStack {
-                    HStack {
-                        ProgressView()
-                        Text(message)
-                            .font(.subheadline)
-                    }
-                    .padding(10)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .padding()
-                .transition(.opacity)
-                .allowsHitTesting(false)
+                detailLoadingBanner(message: message)
             }
         }
+    }
+
+    private func detailLoadingBanner(message: String) -> some View {
+        VStack {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(message)
+                    .font(.subheadline)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding()
+        .transition(.opacity)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Selection
@@ -469,9 +501,7 @@ struct RootShellView: View {
     }
 
     private func refreshLibrariesForAllPlexServers() async {
-        for server in plexServers where server.usesLivePlexAPI {
-            await plexRegistry.refreshLibraries(for: server)
-        }
+        await plexRegistry.refreshLibraries(for: plexServers)
     }
 
     private func selectServer(_ id: UUID) {
@@ -502,21 +532,85 @@ struct RootShellView: View {
     }
 
     private func selectLibrary(_ library: PlexLibrary) {
+#if os(iOS)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+#endif
+        // Mark pending immediately so the sidebar row shows a spinner on the
+        // same frame as the tap — don't wait for the detail column to catch up.
+        pendingLibraryID = library.id
         selectedLibraryIdString = library.id
         resetCatalogNavigation()
         focusCoordinator.focusCatalog()
+        beginDetailLoading(message: "Loading \(library.title)…", persistUntilCleared: true)
+        scheduleDetailLoadingTimeout()
         dismissBrowseMenu()
-        showDetailLoading(message: "Loading \(library.title)…")
+        // Defer completion check so SwiftUI can paint the pending spinner /
+        // loading banner before any synchronous follow-up work on this frame.
+        DispatchQueue.main.async {
+            completeLibraryNavigationIfReady()
+        }
     }
 
-    private func showDetailLoading(message: String, duration: TimeInterval = 0.35) {
+    /// Short-lived banner for server/home transitions (auto-dismisses).
+    private func showDetailLoading(message: String, duration: TimeInterval = 0.6) {
+        beginDetailLoading(message: message, persistUntilCleared: false, autoDismissAfter: duration)
+    }
+
+    /// Starts or updates the detail loading banner. Library navigation keeps
+    /// the banner visible until `completeLibraryNavigationIfReady()` clears it;
+    /// other transitions auto-dismiss after `autoDismissAfter`.
+    private func beginDetailLoading(
+        message: String,
+        persistUntilCleared: Bool,
+        autoDismissAfter: TimeInterval = 0.6
+    ) {
+        detailLoadingCompleteTask?.cancel()
         detailLoadingMessage = message
-        Task {
-            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
-            await MainActor.run {
-                if detailLoadingMessage == message {
-                    detailLoadingMessage = nil
-                }
+        guard !persistUntilCleared else { return }
+        detailLoadingCompleteTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(autoDismissAfter * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            if detailLoadingMessage == message {
+                detailLoadingMessage = nil
+            }
+        }
+    }
+
+    private func clearDetailLoading() {
+        detailLoadingTimeoutTask?.cancel()
+        detailLoadingCompleteTask?.cancel()
+        detailLoadingTimeoutTask = nil
+        detailLoadingCompleteTask = nil
+        detailLoadingMessage = nil
+        pendingLibraryID = nil
+    }
+
+    /// Safety valve so a stuck network fetch can't leave the banner up forever.
+    private func scheduleDetailLoadingTimeout() {
+        detailLoadingTimeoutTask?.cancel()
+        detailLoadingTimeoutTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            guard !Task.isCancelled else { return }
+            clearDetailLoading()
+        }
+    }
+
+    /// Clears the library navigation banner once the detail column is actually
+    /// showing the requested library (or after a short minimum display time).
+    private func completeLibraryNavigationIfReady() {
+        guard pendingLibraryID != nil || detailLoadingMessage != nil else { return }
+        guard let targetID = pendingLibraryID ?? (selectedLibraryIdString.isEmpty ? nil : selectedLibraryIdString),
+              let resolved = selectedPlexLibrary,
+              resolved.id == targetID
+        else { return }
+
+        detailLoadingCompleteTask?.cancel()
+        detailLoadingCompleteTask = Task { @MainActor in
+            // Keep the banner visible long enough to read during fast cache hits.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            if selectedPlexLibrary?.id == targetID {
+                clearDetailLoading()
             }
         }
     }
@@ -528,11 +622,29 @@ struct RootShellView: View {
             focusCoordinator.focusCatalog()
         } else if isHomeDetailVisible {
             focusCoordinator.focusHome()
+        } else if focusCoordinator.route == .detailActions || focusCoordinator.route == .player {
+            // After popping a `MediaDetailView` / `ShowDetailView`, the coordinator
+            // can still be parked on `.detailActions` (set by the detail's onAppear).
+            // The next navigation event would then flip the route a second time
+            // in the same frame, firing the SwiftUI multi-update warning.
+            // Snap back to the catalog pane when we land at the catalog root.
+            if selectedPlexLibrary != nil {
+                focusCoordinator.focusCatalog()
+            } else {
+                focusCoordinator.focusSidebar()
+            }
         }
     }
 
     private var isHomeDetailVisible: Bool {
         catalogPath.isEmpty && selectedPlexLibrary == nil && selectedPlexServer?.isDownloadsServer != true
+    }
+
+    /// Changes when a sidebar library tap can resolve into `LibraryDetailView`.
+    private var libraryNavigationReadyKey: String {
+        let resolved = selectedPlexLibrary?.id ?? "nil"
+        let count = librariesForSelectedServer.count
+        return "\(selectedLibraryIdString)|\(resolved)|\(count)"
     }
 
     private func handleBrowseBack() {
@@ -687,12 +799,20 @@ struct RootShellView: View {
     }
 
     private func applyPendingLibrarySelectionIfNeeded() {
-        guard !selectedLibraryIdString.isEmpty,
-              selectedPlexLibrary == nil,
-              let library = resolveSelectedLibrary(migrateStoredID: true)
-        else { return }
-        selectedLibraryIdString = library.id
-        resetCatalogNavigation()
+        // Defer the mutation off the current SwiftUI render pass so we don't
+        // re-enter `onChange(selectedLibraryIdString)` / `catalogPath.count`
+        // observers from inside another `onChange` handler. That synchronous
+        // re-entrancy was one of the triggers for the
+        // "onChange(of: AppFocusRoute) action tried to update multiple times
+        // per frame" warning during library refresh.
+        DispatchQueue.main.async {
+            guard !selectedLibraryIdString.isEmpty,
+                  selectedPlexLibrary == nil,
+                  let library = resolveSelectedLibrary(migrateStoredID: true)
+            else { return }
+            selectedLibraryIdString = library.id
+            resetCatalogNavigation()
+        }
     }
 
     private func invalidateLibrarySelectionIfNeeded() {

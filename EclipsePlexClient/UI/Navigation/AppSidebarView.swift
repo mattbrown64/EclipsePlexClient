@@ -20,6 +20,9 @@ struct AppSidebarView: View {
 
     @Binding var selectedServerID: UUID?
     @Binding var selectedLibraryID: String?
+    /// Library id whose row should show an in-flight spinner (set on tap,
+    /// cleared when the detail column finishes presenting that library).
+    var pendingLibraryID: String? = nil
 
     var isLoadingLibraries: Bool = false
     var librariesLoadError: String?
@@ -27,11 +30,13 @@ struct AppSidebarView: View {
 
     var isUserAddedServer: (UUID) -> Bool = { _ in false }
     var serverReachable: (UUID) -> Bool? = { _ in nil }
+    var serverLastOnlineAt: (UUID) -> Date? = { _ in nil }
     var onSelectServer: (UUID) -> Void = { _ in }
     var onSelectHome: () -> Void = {}
     var onSelectPlaylists: () -> Void = {}
     var onSelectLibrary: (PlexLibrary) -> Void = { _ in }
     var onEditServer: (PlexServer) -> Void = { _ in }
+    var onManageServer: (PlexServer) -> Void = { _ in }
     var onRemoveServer: (UUID) -> Void = { _ in }
     var onDismissSidebar: () -> Void = {}
     var activeDownloadCount: Int = 0
@@ -44,9 +49,19 @@ struct AppSidebarView: View {
         selectedLibraryID == nil && !isAggregateHomeSelected
     }
 
-    private var sidebarFocusRows: [SidebarFocusRow] {
-        buildSidebarFocusRows()
-    }
+    /// Cached focus rows. Previously this was a computed property that ran
+    /// `buildSidebarFocusRows()` on every body — and `body` referenced it
+    /// twice (`serverButton`, `rowButton`) so each render rebuilt the closure
+    /// array twice plus once per `onChange` trigger. Caching as `@State` and
+    /// refreshing only from the explicit triggers below cuts that down to one
+    /// allocation per actual data change.
+    @State private var sidebarFocusRows: [SidebarFocusRow] = []
+
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
 
     var body: some View {
         ScrollViewReader { scrollProxy in
@@ -118,6 +133,11 @@ struct AppSidebarView: View {
                         isReachable: serverReachable(server.id)
                     )
                     .contextMenu {
+                        if server.usesLivePlexAPI {
+                            Button("Server management…") {
+                                onManageServer(server)
+                            }
+                        }
                         if isUserAddedServer(server.id) {
                             Button("Edit Server…") {
                                 onEditServer(server)
@@ -169,7 +189,8 @@ struct AppSidebarView: View {
                             systemImage: icon(for: library),
                             subtitle: nil,
                             focusRowID: FocusRowID.library(library.id),
-                            isSelected: selectedLibraryID == library.id
+                            isSelected: selectedLibraryID == library.id,
+                            isPending: pendingLibraryID == library.id
                         ) {
                             onSelectLibrary(library)
                         }
@@ -225,7 +246,9 @@ struct AppSidebarView: View {
     }
 
     private func syncSidebarFocusRows() {
-        focusCoordinator.setSidebarRows(sidebarFocusRows)
+        let rows = buildSidebarFocusRows()
+        sidebarFocusRows = rows
+        focusCoordinator.setSidebarRows(rows)
 #if os(tvOS)
         syncTVSidebarFocusFromCoordinator()
 #endif
@@ -258,10 +281,17 @@ struct AppSidebarView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name)
                         .foregroundStyle(.primary)
-                    Text(server.hostDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if isReachable == false, let lastOnline = serverLastOnlineAt(server.id) {
+                        Text("Last online \(Self.relativeDateFormatter.localizedString(for: lastOnline, relativeTo: Date()))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(server.hostDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
                 if badge > 0 {
@@ -278,17 +308,18 @@ struct AppSidebarView: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(
+            .browsePressable(
+                focused: isSidebarFocusActive(
+                    rowID: focusRowID,
+                    rows: sidebarFocusRows,
+                    coordinator: focusCoordinator
+                ),
+                chrome: .sidebarRow
+            )
+        )
         .contentShape(Rectangle())
         .id(focusRowID)
-        .browseFocusHighlight(
-            active: isSidebarFocusActive(
-                rowID: focusRowID,
-                rows: sidebarFocusRows,
-                coordinator: focusCoordinator
-            ),
-            chrome: .sidebarRow
-        )
         .accessibilityLabel(server.name)
         .accessibilityHint("Select server")
         .accessibilityIdentifier(focusRowID)
@@ -313,6 +344,7 @@ struct AppSidebarView: View {
         subtitle: String?,
         focusRowID: String,
         isSelected: Bool,
+        isPending: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -327,29 +359,33 @@ struct AppSidebarView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if isSelected {
+                if isPending {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Loading")
+                } else if isSelected {
                     Image(systemName: "checkmark")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
                 }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(
+            .browsePressable(
+                focused: isSidebarFocusActive(
+                    rowID: focusRowID,
+                    rows: sidebarFocusRows,
+                    coordinator: focusCoordinator
+                ),
+                chrome: .sidebarRow
+            )
+        )
         .contentShape(Rectangle())
         .id(focusRowID)
-        .browseFocusHighlight(
-            active: isSidebarFocusActive(
-                rowID: focusRowID,
-                rows: sidebarFocusRows,
-                coordinator: focusCoordinator
-            ),
-            chrome: .sidebarRow
-        )
         .accessibilityLabel(title)
         .accessibilityHint(subtitle ?? "Open")
         .accessibilityIdentifier(focusRowID)
 #if os(tvOS)
-        .buttonStyle(.plain)
         .focused($tvSidebarFocusedRowID, equals: focusRowID)
 #endif
     }

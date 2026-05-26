@@ -28,7 +28,7 @@ struct AggregateHomeDetailView: View {
 #if os(tvOS)
             .tvBrowseFocusSection(.homeHubs)
 #endif
-            .onChange(of: focusCoordinator.homeFocusedIndex) { _, index in
+            .onChange(of: focusCoordinator.homeFocusedIndex) { index in
                 scrollHomeSelection(to: index, proxy: scrollProxy)
             }
         }
@@ -50,7 +50,7 @@ struct AggregateHomeDetailView: View {
         .onDisappear {
             focusCoordinator.clearHomeItems()
         }
-        .onChange(of: shelves.map(\.server.id)) { _, _ in syncHomeFocusState() }
+        .onChange(of: shelves.map(\.server.id)) { _ in syncHomeFocusState() }
     }
 
     private var aggregateScrollContent: some View {
@@ -62,8 +62,13 @@ struct AggregateHomeDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
 
-                ForEach(Array(shelves.enumerated()), id: \.element.server.id) { shelfIndex, shelf in
-                    serverShelf(shelf, shelfIndex: shelfIndex)
+                // Iterate `indices` rather than `Array(enumerated())` to avoid
+                // re-allocating the tuple array on every body pass. `shelves`
+                // identity is stable across the view's lifetime (one entry per
+                // server); the per-server `shelfIndex` is positional and feeds
+                // home-focus range start computations only.
+                ForEach(shelves.indices, id: \.self) { shelfIndex in
+                    serverShelf(shelves[shelfIndex], shelfIndex: shelfIndex)
                 }
 
                 if plexServers.isEmpty {
@@ -79,7 +84,7 @@ struct AggregateHomeDetailView: View {
                 Button(action: onAddPlexServer) {
                     Label("Add Plex Server", systemImage: "plus.circle.fill")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.pressableBorderedProminent)
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -170,11 +175,10 @@ struct AggregateHomeDetailView: View {
         let generation = loadGeneration
         if invalidateCache {
             await AggregateHomeHubService.invalidateAll()
+            plexRegistry.invalidateLibraryCache()
         }
         isLoading = true
-        for server in plexServers where server.usesLivePlexAPI {
-            await plexRegistry.refreshLibraries(for: server)
-        }
+        await plexRegistry.refreshLibraries(for: plexServers, force: invalidateCache)
         defer { isLoading = false }
         let loaded = await AggregateHomeHubService.load(
             servers: plexServers,

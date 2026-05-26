@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import OSLog
 
 // MARK: - Errors
 
@@ -341,7 +342,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
     let token: String
     let session: URLSession
 
-    init(server: PlexServer, session: URLSession = .shared) throws {
+    init(server: PlexServer, session: URLSession = PlexNetworking.session) throws {
         guard server.usesLivePlexAPI,
               let origin = server.plexOriginURL,
               let raw = server.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -629,6 +630,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
         let pageSize = 200
         var total: Int?
         while true {
+            try Task.checkCancellation()
             var q = extraQuery
             q.append(URLQueryItem(name: "X-Plex-Container-Start", value: String(start)))
             q.append(URLQueryItem(name: "X-Plex-Container-Size", value: String(pageSize)))
@@ -646,6 +648,8 @@ nonisolated struct PlexMediaServerClient: Sendable {
 
     /// One HTTP request (one page).
     func fetchOnePage(path: String, query: [URLQueryItem], method: String = "GET") async throws -> PlexMediaContainerDecoded {
+        let state = AppSignposts.signposter.beginInterval("plex.fetchOnePage", "\(path, privacy: .public)")
+        defer { AppSignposts.signposter.endInterval("plex.fetchOnePage", state) }
         var req = try makeRequest(path: path, query: query)
         req.httpMethod = method
         let (data, response) = try await session.data(for: req)
@@ -657,7 +661,7 @@ nonisolated struct PlexMediaServerClient: Sendable {
             throw PlexAPIError.httpStatus(code: http.statusCode, bodySnippet: snippet)
         }
         do {
-            let root = try JSONDecoder().decode(PlexMediaRoot.self, from: data)
+            let root = try PlexNetworking.jsonDecoder.decode(PlexMediaRoot.self, from: data)
             return root.MediaContainer
         } catch {
             throw PlexAPIError.decodingFailed("Could not read Plex JSON (\(error.localizedDescription)).")
@@ -666,7 +670,16 @@ nonisolated struct PlexMediaServerClient: Sendable {
 
     func makeRequest(path: String, query: [URLQueryItem]) throws -> URLRequest {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        let relativePath = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
+        // Plex command routes (`/:/progress`, `/:/scrobble`) must keep the leading slash;
+        // resolving `:/progress` drops the host and produces invalid `:/progress?...` URLs.
+        let relativePath: String
+        if trimmed.hasPrefix("/:/") {
+            relativePath = trimmed
+        } else if trimmed.hasPrefix("/") {
+            relativePath = String(trimmed.dropFirst())
+        } else {
+            relativePath = trimmed
+        }
         guard let url = URL(string: relativePath, relativeTo: origin)?.absoluteURL else {
             throw PlexAPIError.invalidURL
         }

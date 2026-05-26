@@ -19,7 +19,7 @@ enum OfflineDownloadStoreError: LocalizedError {
     }
 }
 
-enum OfflineDownloadStore {
+nonisolated enum OfflineDownloadStore {
     private static let fileName = "offlineDownloads.v1.json"
 
     static func load() -> [OfflineDownloadRecord] {

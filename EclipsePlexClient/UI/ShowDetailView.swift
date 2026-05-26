@@ -12,13 +12,16 @@ struct ShowDetailView: View {
     let show: PlexShowSummary
 
     @Environment(\.offlineDownloads) private var downloadManager
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.dismissBrowseMenu) private var dismissBrowseMenu
+    @EnvironmentObject private var plexRegistry: PlexServerRegistry
 
     @State private var detail: PlexMediaDetail?
     @State private var seasons: [PlexSeasonSummary] = []
     @State private var resumeEpisode: PlexCatalogNode?
     @State private var isLoading = false
     @State private var loadError: String?
+    @State private var metadataAdminState = MediaMetadataAdminState()
 
     private var childSectionTitle: String {
         library.sectionType == .music ? "Albums" : "Seasons"
@@ -37,6 +40,22 @@ struct ShowDetailView: View {
                     metaLine("Year", String(year))
                 }
                 playActions
+                MediaMetadataAdminSection(
+                    plexServer: plexServer,
+                    ratingKey: show.ratingKey,
+                    title: show.title,
+                    summary: detail?.summary ?? show.summary,
+                    year: detail?.year ?? show.year,
+                    sectionType: library.sectionType,
+                    state: $metadataAdminState,
+                    onMetadataUpdated: {
+                        await load()
+                    },
+                    onItemDeleted: {
+                        dismiss()
+                    }
+                )
+                .environmentObject(plexRegistry)
                 if isLoading, seasons.isEmpty {
                     ProgressView("Loading seasons…")
                 }
@@ -114,6 +133,24 @@ struct ShowDetailView: View {
                 thumbPath: detail?.thumbPath ?? show.thumbPath,
                 style: .detailHero
             )
+            .mediaMetadataAdmin(
+                plexServer: plexServer,
+                ratingKey: show.ratingKey,
+                title: show.title,
+                summary: detail?.summary ?? show.summary,
+                year: detail?.year ?? show.year,
+                state: $metadataAdminState,
+                sectionType: library.sectionType,
+                includesPresentation: false,
+                includesContextMenu: true,
+                onMetadataUpdated: {
+                    await load()
+                },
+                onItemDeleted: {
+                    dismiss()
+                }
+            )
+            .environmentObject(plexRegistry)
             Spacer(minLength: 0)
         }
     }
@@ -134,7 +171,7 @@ struct ShowDetailView: View {
                 ) {
                     Label("Browse all seasons", systemImage: "list.bullet")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.pressableBordered)
                 if let downloadManager {
                     ShowDownloadControls(
                         plexServer: plexServer,
@@ -142,8 +179,7 @@ struct ShowDetailView: View {
                         showRatingKey: show.ratingKey,
                         showTitle: show.title
                     )
-                    .environment(\.offlineDownloads, downloadManager)
-                    .environmentObject(downloadManager)
+                    .offlineDownloads(downloadManager)
                 }
             }
         }
@@ -173,7 +209,7 @@ struct ShowDetailView: View {
                     systemImage: "play.circle.fill"
                 )
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.pressableBorderedProminent)
         }
     }
 
@@ -195,26 +231,34 @@ struct ShowDetailView: View {
         defer { isLoading = false }
         do {
             let client = try PlexMediaServerClient(server: plexServer)
-            detail = try await client.fetchMediaDetail(ratingKey: show.ratingKey)
+            let fetchedDetail = try await client.fetchMediaDetail(ratingKey: show.ratingKey)
+            guard !Task.isCancelled else { return }
+            detail = fetchedDetail
             let seasonNodes = try await client.catalogNodes(
                 library: library,
                 parent: .show(ratingKey: show.ratingKey),
                 watchFilter: .all
             )
+            guard !Task.isCancelled else { return }
             seasons = seasonNodes.compactMap { node in
                 if case .season(let season) = node { return season }
                 return nil
             }
             .sorted { $0.seasonNumber < $1.seasonNumber }
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             loadError = error.localizedDescription
             return
         }
 
-        // Resume lookup walks every season; run after seasons are on screen so navigation stays responsive.
-        Task { @MainActor in
-            await loadResumeEpisode()
-        }
+        // Resume lookup walks every season; runs inline so it inherits this
+        // task's cancellation when the view pops. Previously this spawned an
+        // unstructured `Task { }` that outlived `.task(id:)` and could write
+        // `resumeEpisode` on a dismantled view, abort-killing the process
+        // with a heap "freed pointer was not the last allocation" panic.
+        await loadResumeEpisode()
     }
 
     @MainActor
@@ -226,8 +270,11 @@ struct ShowDetailView: View {
                 library: library,
                 showRatingKey: show.ratingKey
             ) {
+                guard !Task.isCancelled else { return }
                 resumeEpisode = .episode(episode)
             }
+        } catch is CancellationError {
+            return
         } catch {
             AppLog.ui("Resume episode lookup failed: \(error.localizedDescription)")
         }

@@ -20,12 +20,10 @@ struct DownloadsListView: View {
     @State private var wifiOnly = OfflineDownloadPreferences.wifiOnly
     @State private var storageCapGB = OfflineDownloadPreferences.storageCapGB
     @State private var pruneWatched = OfflineDownloadPreferences.pruneWatchedWhenOverCap
-
-    private var sortedRecords: [OfflineDownloadRecord] {
-        downloadManager.records.sorted { lhs, rhs in
-            lhs.createdAt > rhs.createdAt
-        }
-    }
+    /// Cached newest-first sort; recomputed only when `records` changes rather
+    /// than on every body pass (which previously re-sorted on every progress
+    /// tick during downloads).
+    @State private var sortedRecords: [OfflineDownloadRecord] = []
 
     var body: some View {
         List {
@@ -87,9 +85,14 @@ struct DownloadsListView: View {
                     title: route.title
                 )
             )
-            .environment(\.offlineDownloads, downloadManager)
-            .environmentObject(downloadManager)
+            .offlineDownloads(downloadManager)
         }
+        .onAppear { rebuildSortedRecords() }
+        .onChange(of: downloadManager.records) { _, _ in rebuildSortedRecords() }
+    }
+
+    private func rebuildSortedRecords() {
+        sortedRecords = downloadManager.records.sorted { $0.createdAt > $1.createdAt }
     }
 
     private func openPlayback(server: PlexServer, ratingKey: String, title: String) {
@@ -123,10 +126,7 @@ private struct DownloadRowView: View {
                 .foregroundStyle(.secondary)
 
             if record.state == .pending || record.state == .downloading || record.state == .completed {
-                DownloadTransferStatusView(
-                    record: record,
-                    speedBytesPerSecond: downloadManager.transferSpeed(for: record.id)
-                )
+                DownloadTransferStatusView(record: record)
             }
 
             if let error = record.errorMessage {
@@ -144,7 +144,7 @@ private struct DownloadRowView: View {
                     } label: {
                         Label("Play", systemImage: "play.fill")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.pressableBorderedProminent)
                 }
                 if record.state == .failed {
                     Button("Retry") {

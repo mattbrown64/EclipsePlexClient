@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PBX="$ROOT/EclipsePlexClient.xcodeproj/project.pbxproj"
 PODFILE="$ROOT/Podfile"
 
-expect_ios="16.0"
+expect_ios="26.0"
 expect_macos="14.0"
 expect_tvos="17.0"
 
