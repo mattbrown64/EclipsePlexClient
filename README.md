@@ -79,4 +79,9 @@ Siri Remote focus: `TVBrowseFocus.swift` (`focusSection` on sidebar, home hubs, 
 
 ## License
 
-VLCKit is LGPL — see [VideoLAN VLCKit](https://github.com/videolan/vlckit).
+EclipsePlexClient source is [MIT](LICENSE).
+
+Third-party playback libraries:
+
+- VLCKit (LGPL) — [VideoLAN VLCKit](https://github.com/videolan/vlckit)
+- VLCUI (MIT) — [LePips/VLCUI](https://github.com/LePips/VLCUI)
