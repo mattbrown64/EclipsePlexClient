@@ -25,6 +25,7 @@ struct RootShellView: View {
     @State private var serverToEdit: PlexServer?
     @State private var connectionPickerServer: PlexServer?
     @State private var catalogPath = NavigationPath()
+    @State private var detailLoadingMessage: String?
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -362,49 +363,50 @@ struct RootShellView: View {
     }
 
     private var detailColumn: some View {
-        NavigationStack(path: $catalogPath) {
-            Group {
-                if let server = selectedPlexServer, let library = selectedPlexLibrary {
-                    Group {
-                        if server.isDownloadsServer {
-                            CatalogListView(
-                                plexServer: server,
-                                library: library,
-                                parent: .root,
-                                navigationTitle: library.title
-                            )
-                            .onAppear { focusCoordinator.focusCatalog() }
-                        } else {
-                            LibraryDetailView(plexServer: server, library: library)
+        ZStack {
+            NavigationStack(path: $catalogPath) {
+                Group {
+                    if let server = selectedPlexServer, let library = selectedPlexLibrary {
+                        Group {
+                            if server.isDownloadsServer {
+                                CatalogListView(
+                                    plexServer: server,
+                                    library: library,
+                                    parent: .root,
+                                    navigationTitle: library.title
+                                )
+                                .onAppear { focusCoordinator.focusCatalog() }
+                            } else {
+                                LibraryDetailView(plexServer: server, library: library)
+                            }
                         }
+                        .browseMenuToolbar()
+                        .id("\(server.id.uuidString)|\(library.id)")
+                    } else if let server = selectedPlexServer, server.isDownloadsServer {
+                        DownloadsHomeDetailView()
+                    } else if let server = selectedPlexServer {
+                        HomeDetailView(
+                            plexServer: server,
+                            libraries: librariesForSelectedServer,
+                            onAddPlexServer: { showAddPlexServer = true }
+                        )
+                        .onAppear { adoptDetailKeyboardFocusIfNeeded() }
+                    } else {
+                        AggregateHomeDetailView(
+                            plexServers: plexServers,
+                            librariesByServerID: plexRegistry.librariesByServerID,
+                            onAddPlexServer: { showAddPlexServer = true },
+                            onSelectServer: { selectServer($0) }
+                        )
+                        .onAppear { adoptDetailKeyboardFocusIfNeeded() }
                     }
-                    .browseMenuToolbar()
-                    .id("\(server.id.uuidString)|\(library.id)")
-                } else if let server = selectedPlexServer, server.isDownloadsServer {
-                    DownloadsHomeDetailView()
-                } else if let server = selectedPlexServer {
-                    HomeDetailView(
-                        plexServer: server,
-                        libraries: librariesForSelectedServer,
-                        onAddPlexServer: { showAddPlexServer = true }
-                    )
-                    .onAppear { adoptDetailKeyboardFocusIfNeeded() }
-                } else {
-                    AggregateHomeDetailView(
-                        plexServers: plexServers,
-                        librariesByServerID: plexRegistry.librariesByServerID,
-                        onAddPlexServer: { showAddPlexServer = true },
-                        onSelectServer: { selectServer($0) }
-                    )
-                    .onAppear { adoptDetailKeyboardFocusIfNeeded() }
+                }
+                .navigationDestination(for: CatalogNavigationRoute.self) { route in
+                    catalogDestination(for: route)
                 }
             }
-            .navigationDestination(for: CatalogNavigationRoute.self) { route in
-                catalogDestination(for: route)
-            }
-        }
-        .offlineDownloads(downloadManager)
-        .toolbar {
+            .offlineDownloads(downloadManager)
+            .toolbar {
             ToolbarItem(placement: .automatic) {
                 if let server = selectedPlexServer, server.usesLivePlexAPI {
                     Button {
@@ -425,12 +427,31 @@ struct RootShellView: View {
                     .disabled(plexRegistry.librariesLoadingServerID == server.id)
                 }
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showAddPlexServer = true
-                } label: {
-                    Label("Add Plex Server", systemImage: "plus")
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showAddPlexServer = true
+                    } label: {
+                        Label("Add Plex Server", systemImage: "plus")
+                    }
                 }
+            }
+
+            if let message = detailLoadingMessage {
+                VStack {
+                    HStack {
+                        ProgressView()
+                        Text(message)
+                            .font(.subheadline)
+                    }
+                    .padding(10)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding()
+                .transition(.opacity)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -443,6 +464,7 @@ struct RootShellView: View {
         resetCatalogNavigation()
         focusCoordinator.focusHome()
         dismissBrowseMenu()
+        showDetailLoading(message: "Loading all servers…")
         Task { await refreshLibrariesForAllPlexServers() }
     }
 
@@ -457,6 +479,7 @@ struct RootShellView: View {
         setSelectedServerID(id)
         selectedLibraryIdString = ""
         resetCatalogNavigation()
+        showDetailLoading(message: "Loading server…")
         invalidateLibrarySelectionIfNeeded()
     }
 
@@ -483,6 +506,19 @@ struct RootShellView: View {
         resetCatalogNavigation()
         focusCoordinator.focusCatalog()
         dismissBrowseMenu()
+        showDetailLoading(message: "Loading \(library.title)…")
+    }
+
+    private func showDetailLoading(message: String, duration: TimeInterval = 0.35) {
+        detailLoadingMessage = message
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            await MainActor.run {
+                if detailLoadingMessage == message {
+                    detailLoadingMessage = nil
+                }
+            }
+        }
     }
 
     /// Default keyboard focus for the detail column (home hubs vs catalog).
