@@ -13,12 +13,10 @@ struct MediaDetailView: View {
 
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    @EnvironmentObject private var playbackPresenter: PlaybackPresenter
     @Environment(\.dismissBrowseMenu) private var dismissBrowseMenu
 
     @State private var detail: PlexMediaDetail?
-#if os(macOS)
-    @State private var macOSPlaybackRequest: PlaybackRequest?
-#endif
     @State private var isLoadingDetail = false
     @State private var detailError: String?
     @State private var isUpdatingWatchState = false
@@ -124,14 +122,6 @@ struct MediaDetailView: View {
         .task(id: detailTaskKey) {
             await loadDetail()
         }
-#if os(iOS) || os(tvOS)
-        .eclipsePlexFullscreenPlayback(item: $fullscreenPlayback)
-#endif
-#if os(macOS)
-        .navigationDestination(item: $macOSPlaybackRequest) { request in
-            ContentView(request: request)
-        }
-#endif
         .onAppear {
             focusCoordinator.route = .detailActions
         }
@@ -170,13 +160,8 @@ struct MediaDetailView: View {
             title: detailTitle,
             episodeContext: episodePlayContext
         )
-#if os(iOS) || os(tvOS)
         dismissBrowseMenu?.dismiss()
-        fullscreenPlayback = PlaybackPresentationItem(request: request)
-#elseif os(macOS)
-        dismissBrowseMenu?.dismiss()
-        macOSPlaybackRequest = request
-#endif
+        playbackPresenter.present(request)
     }
 
     private var detailTaskKey: String {
@@ -404,26 +389,14 @@ struct MediaDetailView: View {
 
     @ViewBuilder
     private func playButton(request: PlaybackRequest, label: String, isProminent: Bool) -> some View {
-#if os(iOS) || os(tvOS)
         Button {
             dismissBrowseMenu?.dismiss()
-            fullscreenPlayback = PlaybackPresentationItem(request: request)
+            playbackPresenter.present(request)
         } label: {
             Label(label, systemImage: "play.circle.fill")
         }
         .modifier(WatchLinkButtonStyle(isProminent: isProminent))
         .accessibilityIdentifier("watchButton")
-#elseif os(macOS)
-        NavigationLink {
-            ContentView(request: request)
-                .environmentObject(focusCoordinator)
-                .onAppear { dismissBrowseMenu?.dismiss() }
-        } label: {
-            Label(label, systemImage: "play.circle.fill")
-        }
-        .modifier(WatchLinkButtonStyle(isProminent: isProminent))
-        .accessibilityIdentifier("watchButton")
-#endif
     }
 
     @MainActor

@@ -16,6 +16,7 @@ struct RootShellView: View {
     @StateObject private var plexRegistry = PlexServerRegistry()
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
+    @EnvironmentObject private var bootstrapController: AppBootstrapController
 
     @State private var showAddPlexServer = false
     @State private var showSettings = false
@@ -97,6 +98,9 @@ struct RootShellView: View {
     var body: some View {
         rootShell
             .environmentObject(plexRegistry)
+            .task {
+                await bootstrapController.markReady(minimumDuration: 0.25)
+            }
             .task {
                 await plexRegistry.refreshAllReachability()
             }
@@ -658,6 +662,12 @@ struct RootShellView: View {
     private func invalidateLibrarySelectionIfNeeded() {
         let libs = librariesForSelectedServer
         guard !libs.isEmpty else {
+            // If libraries are still loading for this server, keep the persisted
+            // library selection so it can be restored once the fetch completes.
+            if let server = selectedPlexServer,
+               plexRegistry.librariesLoadingServerID == server.id {
+                return
+            }
             if selectedPlexServer?.isDownloadsServer != true {
                 selectedLibraryIdString = ""
             }

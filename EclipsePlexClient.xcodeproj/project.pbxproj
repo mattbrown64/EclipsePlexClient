@@ -35,22 +35,16 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C57A05632FB8016000237EB8 /* EclipsePlexClient */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = EclipsePlexClient;
 			sourceTree = "<group>";
 		};
 		C57A05712FB8016100237EB8 /* EclipsePlexClientTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = EclipsePlexClientTests;
 			sourceTree = "<group>";
 		};
 		C57A057B2FB8016100237EB8 /* EclipsePlexClientUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = EclipsePlexClientUITests;
 			sourceTree = "<group>";
 		};
@@ -297,9 +291,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;

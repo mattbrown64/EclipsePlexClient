@@ -70,10 +70,6 @@ struct AggregateHomeDetailView: View {
                     Text("Add a Plex server to see Continue Watching and Recently Added.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                } else if !isLoading, shelves.isEmpty {
-                    Text("Loading libraries from your Plex servers…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
                 } else if !isLoading, shelves.allSatisfy({ $0.continueWatching.isEmpty && $0.recentlyAdded.isEmpty && $0.errorMessage == nil }) {
                     Text("No continue watching or recently added items right now. Try refreshing or open a server’s Home.")
                         .font(.subheadline)
@@ -175,10 +171,10 @@ struct AggregateHomeDetailView: View {
         if invalidateCache {
             await AggregateHomeHubService.invalidateAll()
         }
+        isLoading = true
         for server in plexServers where server.usesLivePlexAPI {
             await plexRegistry.refreshLibraries(for: server)
         }
-        isLoading = true
         defer { isLoading = false }
         let loaded = await AggregateHomeHubService.load(
             servers: plexServers,

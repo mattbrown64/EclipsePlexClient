@@ -192,7 +192,17 @@ struct HomeDetailView: View {
 
     @MainActor
     private func loadHubs() async {
-        guard let plexServer, plexServer.usesLivePlexAPI, !libraries.isEmpty else {
+        guard let plexServer, plexServer.usesLivePlexAPI else {
+            continueWatching = []
+            recentlyAdded = []
+            hubsError = nil
+            isLoadingHubs = false
+            return
+        }
+        // If the server is still loading its libraries, show a loading state for
+        // the home hubs instead of presenting an empty screen.
+        guard !libraries.isEmpty else {
+            isLoadingHubs = true
             continueWatching = []
             recentlyAdded = []
             hubsError = nil

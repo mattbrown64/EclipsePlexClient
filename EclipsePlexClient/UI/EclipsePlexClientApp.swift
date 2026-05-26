@@ -13,6 +13,8 @@ struct EclipsePlexClientApp: App {
     @UIApplicationDelegateAdaptor(OfflineDownloadAppDelegate.self) private var appDelegate
 #endif
     @StateObject private var downloadManager = OfflineDownloadManager()
+    @StateObject private var bootstrapController = AppBootstrapController()
+    @StateObject private var playbackPresenter = PlaybackPresenter()
 
     init() {
         CrashReporter.start()
@@ -23,16 +25,25 @@ struct EclipsePlexClientApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootShellView()
-                .offlineDownloads(downloadManager)
-                .environmentObject(toastCenter)
-                .environmentObject(focusCoordinator)
-                .environmentObject(playbackQueue)
-                .appToastOverlay(toastCenter)
-#if os(iOS) || os(macOS)
-                .background {
-                    BrowseKeyboardCaptureView(coordinator: focusCoordinator)
+            ZStack {
+                RootShellView()
+                    .offlineDownloads(downloadManager)
+                    .environmentObject(toastCenter)
+                    .environmentObject(focusCoordinator)
+                    .environmentObject(playbackQueue)
+                    .environmentObject(playbackPresenter)
+                    .appToastOverlay(toastCenter)
+                    .environmentObject(bootstrapController)
+
+                if !bootstrapController.isReady {
+                    LaunchSplashView()
+                        .transition(.opacity)
                 }
+            }
+#if os(iOS) || os(macOS)
+            .background {
+                BrowseKeyboardCaptureView(coordinator: focusCoordinator)
+            }
 #endif
         }
 #if os(macOS)
