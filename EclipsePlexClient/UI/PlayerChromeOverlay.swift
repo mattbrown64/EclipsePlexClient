@@ -12,6 +12,8 @@ struct PlayerChromeOverlay<TopTrailing: View, Bottom: View>: View {
     var onSkipMarker: () -> Void = {}
     let onExit: () -> Void
     let onInteraction: () -> Void
+    /// Tap on the empty area between top and bottom chrome (e.g. hide controls).
+    var onBackgroundTap: () -> Void = {}
     @ViewBuilder let topTrailing: () -> TopTrailing
     @ViewBuilder let bottom: () -> Bottom
 
@@ -20,7 +22,8 @@ struct PlayerChromeOverlay<TopTrailing: View, Bottom: View>: View {
             VStack(spacing: 0) {
                 topChrome
                 Spacer()
-                    .allowsHitTesting(false)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onBackgroundTap)
                 bottomChrome
             }
         }
@@ -65,7 +68,9 @@ struct PlayerChromeOverlay<TopTrailing: View, Bottom: View>: View {
                     .frame(minWidth: 44, alignment: .trailing)
             }
             .padding()
+            .padding(.top, 4)
         }
+        .safeAreaPadding(.top)
     }
 
     private var bottomChrome: some View {
@@ -73,6 +78,9 @@ struct PlayerChromeOverlay<TopTrailing: View, Bottom: View>: View {
             PlayerChromeScrim(edge: .bottom)
             bottom()
         }
+#if os(iOS)
+        .safeAreaPadding(.bottom, 8)
+#endif
     }
 }
 

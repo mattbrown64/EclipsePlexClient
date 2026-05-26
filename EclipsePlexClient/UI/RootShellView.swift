@@ -4,42 +4,49 @@
 //
 
 import SwiftUI
-#if os(iOS)
+#if os(iOS) || os(tvOS)
 import UIKit
 #endif
 
-/// Root UI: collapsible browse menu + detail (catalog). iPhone uses a sheet; iPad/Mac use split view.
+/// Root UI: collapsible browse menu + detail (catalog). iPhone uses a leading overlay; iPad/Mac use split view.
 struct RootShellView: View {
     @AppStorage("selectedPlexServerId") private var selectedServerIdString = ""
     @AppStorage("selectedPlexLibraryId") private var selectedLibraryIdString = ""
 
     @StateObject private var plexRegistry = PlexServerRegistry()
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
 
     @State private var showAddPlexServer = false
     @State private var showSettings = false
+    @State private var showServerSearch = false
     @State private var didOfferAddServerOnLaunch = false
     @State private var serverToEdit: PlexServer?
+    @State private var connectionPickerServer: PlexServer?
     @State private var catalogPath = NavigationPath()
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
 
-#if os(iOS)
+#if os(iOS) || os(tvOS)
     @State private var browseSheetPresented = false
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var didPromptBrowseOnLaunch = false
-#elseif os(macOS)
+#endif
+#if os(iOS) || os(macOS)
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 #endif
 
     private var plexServers: [PlexServer] { plexRegistry.allServers }
     private var deviceServers: [PlexServer] { [PlexServer.downloads] }
 
-#if os(iOS)
-    /// Sheet when split-view sidebar is unreliable (iPhone, iPad compact / Slide Over).
-    private var usesBrowseSheet: Bool {
+#if os(iOS) || os(tvOS)
+    /// Leading overlay menu (iPhone / compact iPad / Apple TV).
+    private var usesBrowseOverlay: Bool {
+        #if os(tvOS)
+        true
+        #else
         UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+        #endif
     }
 #endif
 
@@ -90,11 +97,39 @@ struct RootShellView: View {
     var body: some View {
         rootShell
             .environmentObject(plexRegistry)
+            .task {
+                await plexRegistry.refreshAllReachability()
+            }
+            .onChange(of: showSettings) { _, showing in
+                focusCoordinator.browseKeyboardCommandsEnabled = !showing
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexBrowseBack)) { _ in
+                handleBrowseBack()
+            }
+            .onChange(of: selectedLibraryIdString) { _, _ in
+                adoptDetailKeyboardFocusIfNeeded()
+            }
+            .onChange(of: selectedServerIdString) { _, _ in
+                adoptDetailKeyboardFocusIfNeeded()
+            }
+            .onChange(of: catalogPath.count) { _, _ in
+                adoptDetailKeyboardFocusIfNeeded()
+            }
             .environment(\.openBrowseMenu, OpenBrowseMenuAction(open: presentBrowseMenu))
             .environment(\.dismissBrowseMenu, DismissBrowseMenuAction(dismiss: dismissBrowseMenu))
             .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexOpenBrowseMenu)) { _ in
                 presentBrowseMenu()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexOpenSearch)) { _ in
+                presentServerSearch()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexRefreshLibraries)) { _ in
+                Task { await refreshSelectedServerLibraries() }
+            }
+            .environment(
+                \.openServerSearch,
+                OpenServerSearchAction(open: presentServerSearch)
+            )
             .environment(
                 \.catalogNavigationActions,
                 CatalogNavigationActions(
@@ -103,6 +138,10 @@ struct RootShellView: View {
                     },
                     pushRoute: { route in
                         catalogPath.append(route)
+                    },
+                    popRoute: {
+                        guard !catalogPath.isEmpty else { return }
+                        catalogPath.removeLast()
                     }
                 )
             )
@@ -117,18 +156,32 @@ struct RootShellView: View {
             .sheet(item: $serverToEdit) { server in
                 EditPlexServerSheet(registry: plexRegistry, server: server)
             }
+            .sheet(item: $connectionPickerServer) { server in
+                ServerConnectionPickerSheet(server: server, registry: plexRegistry)
+            }
             .sheet(isPresented: $showSettings) {
                 NavigationStack {
                     SettingsView(registry: plexRegistry)
                         .environmentObject(downloadManager)
                 }
             }
+            .sheet(isPresented: $showServerSearch) {
+                if let server = selectedPlexServer, server.usesLivePlexAPI {
+                    ServerSearchView(
+                        plexServer: server,
+                        libraries: librariesForSelectedServer
+                    )
+                }
+            }
             .onAppear {
                 downloadManager.configure(registry: plexRegistry)
+                focusCoordinator.browseKeyboardCommandsEnabled = !showSettings
+                applyUITestLaunchPresentationIfNeeded()
                 // Empty selection = aggregate Home (all servers). Keep stored server id on upgrade.
                 invalidateLibrarySelectionIfNeeded()
+                adoptDetailKeyboardFocusIfNeeded()
                 offerAddServerIfNeeded()
-#if os(iOS)
+#if os(iOS) || os(tvOS)
                 promptBrowseMenuIfNeeded()
 #endif
             }
@@ -152,14 +205,7 @@ struct RootShellView: View {
                     }
                 }
             }
-#if os(iOS)
-            .sheet(isPresented: $browseSheetPresented) {
-                NavigationStack {
-                    browseSidebar()
-                }
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-            }
+#if os(iOS) || os(tvOS)
             .onChange(of: showAddPlexServer) { wasShowing, isShowing in
                 if wasShowing, !isShowing {
                     promptBrowseMenuIfNeeded()
@@ -170,8 +216,10 @@ struct RootShellView: View {
 
     @ViewBuilder
     private var rootShell: some View {
-#if os(iOS)
-        if usesBrowseSheet {
+#if os(tvOS)
+        phoneShell
+#elseif os(iOS)
+        if usesBrowseOverlay {
             phoneShell
         } else {
             ipadSplitShell
@@ -181,11 +229,46 @@ struct RootShellView: View {
 #endif
     }
 
-#if os(iOS)
+#if os(iOS) || os(tvOS)
     private var phoneShell: some View {
-        detailColumn
+        ZStack(alignment: .leading) {
+            detailColumn
+
+            if browseSheetPresented {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        dismissBrowseMenu()
+                    }
+                    .transition(.opacity)
+                    .zIndex(1)
+
+                browseOverlayPanel
+                    .transition(.move(edge: .leading))
+                    .zIndex(2)
+            }
+        }
     }
 
+    private var browseOverlayPanel: some View {
+        NavigationStack {
+            browseSidebar()
+        }
+        .frame(width: min(320, UIScreen.main.bounds.width * 0.88))
+        .frame(maxHeight: .infinity)
+        .background(browseOverlayBackground)
+        .shadow(color: .black.opacity(0.2), radius: 12, x: 4, y: 0)
+    }
+
+    private var browseOverlayBackground: Color {
+        #if os(tvOS)
+        Color(white: 0.12)
+        #else
+        Color(uiColor: .systemBackground)
+        #endif
+    }
+
+    #if os(iOS)
     private var ipadSplitShell: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarColumn
@@ -193,8 +276,23 @@ struct RootShellView: View {
             detailColumn
         }
     }
+
+    private func collapseSplitSidebar() {
+        guard horizontalSizeClass == .compact else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            columnVisibility = .detailOnly
+        }
+    }
+
+    private func showSplitSidebar() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            columnVisibility = .all
+        }
+    }
+    #endif
 #endif
 
+#if os(macOS)
     private var splitShell: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarColumn
@@ -202,6 +300,7 @@ struct RootShellView: View {
             detailColumn
         }
     }
+#endif
 
     private var sidebarColumn: some View {
         NavigationStack {
@@ -250,6 +349,10 @@ struct RootShellView: View {
                 showSettings = true
                 dismissBrowseMenu()
             },
+            onRetryLibraries: {
+                guard let server = selectedPlexServer else { return }
+                Task { await plexRegistry.refreshLibraries(for: server) }
+            },
             isAggregateHomeSelected: selectedServerID == nil
         )
     }
@@ -258,12 +361,19 @@ struct RootShellView: View {
         NavigationStack(path: $catalogPath) {
             Group {
                 if let server = selectedPlexServer, let library = selectedPlexLibrary {
-                    CatalogListView(
-                        plexServer: server,
-                        library: library,
-                        parent: .root,
-                        navigationTitle: library.title
-                    )
+                    Group {
+                        if server.isDownloadsServer {
+                            CatalogListView(
+                                plexServer: server,
+                                library: library,
+                                parent: .root,
+                                navigationTitle: library.title
+                            )
+                            .onAppear { focusCoordinator.focusCatalog() }
+                        } else {
+                            LibraryDetailView(plexServer: server, library: library)
+                        }
+                    }
                     .browseMenuToolbar()
                     .id("\(server.id.uuidString)|\(library.id)")
                 } else if let server = selectedPlexServer, server.isDownloadsServer {
@@ -274,6 +384,7 @@ struct RootShellView: View {
                         libraries: librariesForSelectedServer,
                         onAddPlexServer: { showAddPlexServer = true }
                     )
+                    .onAppear { adoptDetailKeyboardFocusIfNeeded() }
                 } else {
                     AggregateHomeDetailView(
                         plexServers: plexServers,
@@ -281,6 +392,7 @@ struct RootShellView: View {
                         onAddPlexServer: { showAddPlexServer = true },
                         onSelectServer: { selectServer($0) }
                     )
+                    .onAppear { adoptDetailKeyboardFocusIfNeeded() }
                 }
             }
             .navigationDestination(for: CatalogNavigationRoute.self) { route in
@@ -289,6 +401,16 @@ struct RootShellView: View {
         }
         .offlineDownloads(downloadManager)
         .toolbar {
+            ToolbarItem(placement: .automatic) {
+                if let server = selectedPlexServer, server.usesLivePlexAPI {
+                    Button {
+                        presentServerSearch()
+                    } label: {
+                        Label("Search", systemImage: "magnifyingglass")
+                    }
+                    .accessibilityIdentifier("serverSearchButton")
+                }
+            }
             ToolbarItem(placement: .automatic) {
                 if let server = selectedPlexServer, server.usesLivePlexAPI {
                     Button {
@@ -315,6 +437,7 @@ struct RootShellView: View {
         setSelectedServerID(nil)
         selectedLibraryIdString = ""
         resetCatalogNavigation()
+        focusCoordinator.focusHome()
         dismissBrowseMenu()
         Task { await refreshLibrariesForAllPlexServers() }
     }
@@ -340,6 +463,7 @@ struct RootShellView: View {
         }
         selectedLibraryIdString = ""
         resetCatalogNavigation()
+        focusCoordinator.focusHome()
         dismissBrowseMenu()
     }
 
@@ -353,13 +477,64 @@ struct RootShellView: View {
     private func selectLibrary(_ library: PlexLibrary) {
         selectedLibraryIdString = library.id
         resetCatalogNavigation()
+        focusCoordinator.focusCatalog()
         dismissBrowseMenu()
     }
 
+    /// Default keyboard focus for the detail column (home hubs vs catalog).
+    private func adoptDetailKeyboardFocusIfNeeded() {
+        guard catalogPath.isEmpty else { return }
+        if selectedPlexServer?.isDownloadsServer == true, selectedPlexLibrary != nil {
+            focusCoordinator.focusCatalog()
+        } else if isHomeDetailVisible {
+            focusCoordinator.focusHome()
+        }
+    }
+
+    private var isHomeDetailVisible: Bool {
+        catalogPath.isEmpty && selectedPlexLibrary == nil && selectedPlexServer?.isDownloadsServer != true
+    }
+
+    private func handleBrowseBack() {
+        if !catalogPath.isEmpty {
+            catalogPath.removeLast()
+            adoptDetailKeyboardFocusIfNeeded()
+            return
+        }
+        if focusCoordinator.route == .catalogList || focusCoordinator.route == .homeHubs {
+            focusCoordinator.focusSidebar()
+            return
+        }
+#if os(iOS) || os(tvOS)
+        if usesBrowseOverlay, browseSheetPresented {
+            dismissBrowseMenu()
+        }
+#endif
+    }
+
+    private func presentServerSearch() {
+        guard let server = selectedPlexServer, server.usesLivePlexAPI else { return }
+        showServerSearch = true
+    }
+
+    private func refreshSelectedServerLibraries() async {
+        if let server = selectedPlexServer, !server.isDownloadsServer {
+            await plexRegistry.refreshLibraries(for: server)
+        } else if selectedServerID == nil {
+            await refreshLibrariesForAllPlexServers()
+        }
+    }
+
     private func presentBrowseMenu() {
-#if os(iOS)
-        if usesBrowseSheet {
+#if os(tvOS)
+        withAnimation(.easeInOut(duration: 0.25)) {
             browseSheetPresented = true
+        }
+#elseif os(iOS)
+        if usesBrowseOverlay {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                browseSheetPresented = true
+            }
         } else {
             showSplitSidebar()
         }
@@ -369,9 +544,15 @@ struct RootShellView: View {
     }
 
     private func dismissBrowseMenu() {
-#if os(iOS)
-        if usesBrowseSheet {
+#if os(tvOS)
+        withAnimation(.easeInOut(duration: 0.25)) {
             browseSheetPresented = false
+        }
+#elseif os(iOS)
+        if usesBrowseOverlay {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                browseSheetPresented = false
+            }
         } else {
             collapseSplitSidebar()
         }
@@ -382,28 +563,22 @@ struct RootShellView: View {
 #endif
     }
 
-#if os(iOS)
+#if os(iOS) || os(tvOS)
     private func promptBrowseMenuIfNeeded() {
-        guard usesBrowseSheet, !didPromptBrowseOnLaunch else { return }
+        #if os(tvOS)
+        guard !didPromptBrowseOnLaunch else { return }
+        #else
+        guard usesBrowseOverlay, !didPromptBrowseOnLaunch else { return }
+        #endif
         guard !showAddPlexServer else { return }
         didPromptBrowseOnLaunch = true
         if selectedPlexLibrary == nil {
-            browseSheetPresented = true
+            withAnimation(.easeInOut(duration: 0.25)) {
+                browseSheetPresented = true
+            }
         }
     }
 
-    private func collapseSplitSidebar() {
-        guard horizontalSizeClass == .compact else { return }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            columnVisibility = .detailOnly
-        }
-    }
-
-    private func showSplitSidebar() {
-        withAnimation(.easeInOut(duration: 0.25)) {
-            columnVisibility = .all
-        }
-    }
 #elseif os(macOS)
     private func showSplitSidebar() {
         withAnimation(.easeInOut(duration: 0.25)) {
@@ -413,6 +588,7 @@ struct RootShellView: View {
 #endif
 
     private func offerAddServerIfNeeded() {
+        guard !ProcessInfo.processInfo.arguments.contains("-UITestSkipOnboarding") else { return }
         guard !didOfferAddServerOnLaunch, plexServers.isEmpty else { return }
         didOfferAddServerOnLaunch = true
         DispatchQueue.main.async {
@@ -460,6 +636,8 @@ struct RootShellView: View {
                         parent: .collection(ratingKey: collectionKey),
                         navigationTitle: title
                     )
+                case .liveTV:
+                    LiveTVBrowseView(plexServer: server)
                 }
             }
             .offlineDownloads(downloadManager)
@@ -505,6 +683,20 @@ struct RootShellView: View {
             selectedLibraryIdString = match.id
         }
         return match
+    }
+
+    private func applyUITestLaunchPresentationIfNeeded() {
+        let args = ProcessInfo.processInfo.arguments
+#if os(macOS)
+        if args.contains("-UITestShowSidebar") {
+            columnVisibility = .all
+        }
+#endif
+#if os(iOS) || os(tvOS)
+        if args.contains("-UITestShowSidebar") {
+            browseSheetPresented = true
+        }
+#endif
     }
 }
 

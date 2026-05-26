@@ -6,7 +6,7 @@ Cross-platform SwiftUI playback uses [VLCUI](https://github.com/LePips/VLCUI) wi
 |----------|----------------|
 | iOS / iOS Simulator | [MobileVLCKit](https://cocoapods.org/pods/MobileVLCKit) (CocoaPods) |
 | macOS | `Frameworks/VLCKit.xcframework` (vendored 3.6.0) |
-| visionOS | Not supported by VLCUI yet — use another player if you add a visionOS target |
+| tvOS | `Frameworks/TVVLCKit.xcframework` via `./scripts/fetch-tvvlckit.sh` (CocoaPods cannot mix MobileVLCKit + TVVLCKit in one Podfile) |
 
 ## Open the workspace (required)
 
@@ -41,6 +41,12 @@ If macOS build fails with a missing `VLCKit.xcframework`, run:
 
 ```bash
 ./scripts/fetch-vlckit-macos.sh
+```
+
+For **Apple TV** builds, install TVVLCKit then add `FRAMEWORK_SEARCH_PATHS` for `appletvos*` to `Frameworks/TVVLCKit.xcframework` in Xcode if needed:
+
+```bash
+./scripts/fetch-tvvlckit.sh
 ```
 
 ## Usage

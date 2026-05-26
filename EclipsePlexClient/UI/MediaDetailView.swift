@@ -12,12 +12,24 @@ struct MediaDetailView: View {
     let node: PlexCatalogNode
 
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
     @Environment(\.dismissBrowseMenu) private var dismissBrowseMenu
 
     @State private var detail: PlexMediaDetail?
+#if os(macOS)
+    @State private var macOSPlaybackRequest: PlaybackRequest?
+#endif
     @State private var isLoadingDetail = false
     @State private var detailError: String?
     @State private var isUpdatingWatchState = false
+    @State private var extras: [PlexExtraItem] = []
+    @State private var relatedShelves: [PlexHubShelf] = []
+#if os(iOS) || os(tvOS)
+    @State private var fullscreenPlayback: PlaybackPresentationItem?
+#endif
+#if os(tvOS)
+    @FocusState private var tvDetailFocus: TVDetailFocusField?
+#endif
 
     var body: some View {
         ScrollView {
@@ -39,6 +51,9 @@ struct MediaDetailView: View {
                     if let artist = track.artist { metaLine("Artist", artist) }
                     if let album = track.album { metaLine("Album", album) }
                     baseContent(for: track.title, summary: nil, year: nil)
+                case .photo(let photo):
+                    heroArtwork(photo.thumbPath)
+                    baseContent(for: photo.title, summary: nil, year: nil)
                 case .show, .season:
                     Text("Select a movie, episode, or track to see details.")
                         .foregroundStyle(.secondary)
@@ -46,7 +61,32 @@ struct MediaDetailView: View {
 
                 if let detail {
                     enrichedMetadata(detail)
-                } else if isLoadingDetail {
+                }
+                if !extras.isEmpty {
+                    Text("Extras")
+                        .font(.headline)
+                    ForEach(extras) { extra in
+                        if plexServer.usesLivePlexAPI {
+                            playButton(
+                                request: .plex(server: plexServer, ratingKey: extra.ratingKey, title: extra.title),
+                                label: "\(extra.displayType): \(extra.title)",
+                                isProminent: false
+                            )
+                        }
+                    }
+                }
+                if !relatedShelves.isEmpty {
+                    ForEach(relatedShelves) { shelf in
+                        HubRowView(
+                            title: shelf.title,
+                            hits: shelf.hits,
+                            plexServer: plexServer,
+                            shelfKey: "detail|\(playbackRatingKey ?? "")|\(shelf.id)",
+                            navigatesInPlace: true
+                        )
+                    }
+                }
+                if detail == nil, isLoadingDetail {
                     ProgressView("Loading details…")
                 } else if let detailError {
                     Text(detailError)
@@ -84,6 +124,59 @@ struct MediaDetailView: View {
         .task(id: detailTaskKey) {
             await loadDetail()
         }
+#if os(iOS) || os(tvOS)
+        .eclipsePlexFullscreenPlayback(item: $fullscreenPlayback)
+#endif
+#if os(macOS)
+        .navigationDestination(item: $macOSPlaybackRequest) { request in
+            ContentView(request: request)
+        }
+#endif
+        .onAppear {
+            focusCoordinator.route = .detailActions
+        }
+        .onKeyPress(keys: [.init("w")]) { _ in
+            startKeyboardWatch(resume: false)
+            return .handled
+        }
+        .onKeyPress(keys: [.init("W")]) { _ in
+            startKeyboardWatch(resume: false)
+            return .handled
+        }
+        .onKeyPress(keys: [.init("r")]) { _ in
+            if canResumePlayback {
+                startKeyboardWatch(resume: true)
+            }
+            return .handled
+        }
+        .onKeyPress(keys: [.init("R")]) { _ in
+            if canResumePlayback {
+                startKeyboardWatch(resume: true)
+            }
+            return .handled
+        }
+    }
+
+    private func startKeyboardWatch(resume: Bool) {
+        guard node.supportsVideoPlayback,
+              let ratingKey = playbackRatingKey,
+              plexServer.usesLivePlexAPI,
+              !plexServer.isDownloadsServer
+        else { return }
+        if resume, !canResumePlayback { return }
+        let request = PlaybackRequest.plex(
+            server: plexServer,
+            ratingKey: ratingKey,
+            title: detailTitle,
+            episodeContext: episodePlayContext
+        )
+#if os(iOS) || os(tvOS)
+        dismissBrowseMenu?.dismiss()
+        fullscreenPlayback = PlaybackPresentationItem(request: request)
+#elseif os(macOS)
+        dismissBrowseMenu?.dismiss()
+        macOSPlaybackRequest = request
+#endif
     }
 
     private var detailTaskKey: String {
@@ -189,20 +282,15 @@ struct MediaDetailView: View {
     private func offlineFileActions(record: OfflineDownloadRecord) -> some View {
         HStack(spacing: 12) {
             if let origin = originPlexServer {
-                NavigationLink {
-                    ContentView(
-                        request: .downloadedPlexItem(
-                            server: origin,
-                            ratingKey: record.ratingKey,
-                            title: detailTitle
-                        )
-                    )
-                    .environment(\.offlineDownloads, downloadManager)
-                    .environmentObject(downloadManager)
-                } label: {
-                    Label("Play", systemImage: "play.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
+                playButton(
+                    request: .downloadedPlexItem(
+                        server: origin,
+                        ratingKey: record.ratingKey,
+                        title: detailTitle
+                    ),
+                    label: "Play",
+                    isProminent: true
+                )
             }
             Button("Remove download", role: .destructive) {
                 downloadManager.delete(id: record.id)
@@ -219,12 +307,18 @@ struct MediaDetailView: View {
                 HStack(spacing: 12) {
                     if canResumePlayback {
                         watchNavigationLink(ratingKey: ratingKey, label: "Resume", isProminent: true)
+#if os(tvOS)
+                            .focused($tvDetailFocus, equals: .resume)
+#endif
                     }
                     watchNavigationLink(
                         ratingKey: ratingKey,
                         label: canResumePlayback ? "Play from start" : "Watch",
                         isProminent: !canResumePlayback
                     )
+#if os(tvOS)
+                    .focused($tvDetailFocus, equals: .watch)
+#endif
                     if detail != nil {
                         Button {
                             Task { await toggleWatched(ratingKey: ratingKey) }
@@ -240,6 +334,12 @@ struct MediaDetailView: View {
                         .disabled(isUpdatingWatchState)
                     }
                 }
+#if os(tvOS)
+                .tvBrowseFocusSection(.detailActions)
+                .onAppear {
+                    tvDetailFocus = canResumePlayback ? .resume : .watch
+                }
+#endif
             } else {
                 Text("Add a reachable server URL and Plex token to play this item.")
                     .font(.caption)
@@ -290,20 +390,40 @@ struct MediaDetailView: View {
         label: String,
         isProminent: Bool
     ) -> some View {
-        NavigationLink {
-            ContentView(
-                request: .plex(
-                    server: plexServer,
-                    ratingKey: ratingKey,
-                    title: detailTitle,
-                    episodeContext: episodePlayContext
-                )
-            )
-            .onAppear { dismissBrowseMenu?.dismiss() }
+        playButton(
+            request: .plex(
+                server: plexServer,
+                ratingKey: ratingKey,
+                title: detailTitle,
+                episodeContext: episodePlayContext
+            ),
+            label: label,
+            isProminent: isProminent
+        )
+    }
+
+    @ViewBuilder
+    private func playButton(request: PlaybackRequest, label: String, isProminent: Bool) -> some View {
+#if os(iOS) || os(tvOS)
+        Button {
+            dismissBrowseMenu?.dismiss()
+            fullscreenPlayback = PlaybackPresentationItem(request: request)
         } label: {
             Label(label, systemImage: "play.circle.fill")
         }
         .modifier(WatchLinkButtonStyle(isProminent: isProminent))
+        .accessibilityIdentifier("watchButton")
+#elseif os(macOS)
+        NavigationLink {
+            ContentView(request: request)
+                .environmentObject(focusCoordinator)
+                .onAppear { dismissBrowseMenu?.dismiss() }
+        } label: {
+            Label(label, systemImage: "play.circle.fill")
+        }
+        .modifier(WatchLinkButtonStyle(isProminent: isProminent))
+        .accessibilityIdentifier("watchButton")
+#endif
     }
 
     @MainActor
@@ -317,6 +437,8 @@ struct MediaDetailView: View {
         do {
             let client = try PlexMediaServerClient(server: plexServer)
             detail = try await client.fetchMediaDetail(ratingKey: ratingKey)
+            extras = (try? await client.fetchExtras(ratingKey: ratingKey)) ?? []
+            relatedShelves = (try? await client.fetchRelatedHubShelves(ratingKey: ratingKey, library: library)) ?? []
         } catch {
             detailError = error.localizedDescription
         }
@@ -361,4 +483,5 @@ private struct WatchLinkButtonStyle: ViewModifier {
         MediaDetailView(plexServer: server, library: lib, node: node)
     }
     .environmentObject(OfflineDownloadManager())
+    .environmentObject(KeyboardFocusCoordinator())
 }

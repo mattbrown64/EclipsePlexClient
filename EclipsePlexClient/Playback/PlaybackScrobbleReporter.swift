@@ -79,7 +79,7 @@ enum PlaybackScrobbleReporter {
                 durationMs: durationMs
             )
         } catch {
-            NSLog("[EclipsePlex] Plex timeline playing failed: %@", error.localizedDescription)
+            AppLog.network("Plex timeline playing failed: \(error.localizedDescription)")
         }
     }
 
@@ -100,7 +100,7 @@ enum PlaybackScrobbleReporter {
                 durationMs: durationMs
             )
         } catch {
-            NSLog("[EclipsePlex] Plex timeline stopped failed: %@", error.localizedDescription)
+            AppLog.network("Plex timeline stopped failed: \(error.localizedDescription)")
         }
     }
 
@@ -138,14 +138,11 @@ enum PlaybackScrobbleReporter {
             if isSessionEnd {
                 reportedSessionEndKeys.insert(sessionKey)
             }
-            NSLog(
-                "[EclipsePlex] Plex progress %@ (nearEnd=%d pos=%d)",
-                isSessionEnd ? "sessionEnd" : "periodic",
-                nearEnd ? 1 : 0,
-                safePosition
+            AppLog.networkDebug(
+                "Plex progress \(isSessionEnd ? "sessionEnd" : "periodic") nearEnd=\(nearEnd) pos=\(safePosition)"
             )
         } catch {
-            NSLog("[EclipsePlex] Plex watch report failed: %@", error.localizedDescription)
+            AppLog.network("Plex watch report failed: \(error.localizedDescription)")
             if !isSessionEnd {
                 AppToastCenter.show("Couldn’t sync watch progress to Plex.")
             }

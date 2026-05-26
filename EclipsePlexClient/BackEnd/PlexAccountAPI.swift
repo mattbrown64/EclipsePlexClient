@@ -169,6 +169,7 @@ nonisolated enum PlexAccountAPI: Sendable {
 
         let name = d.name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Plex Server"
         let id = UUID.stableFromPlexResourceIdentifier(rid)
+        PlexServerConnectionStore.setCandidates(sorted.map(\.url), for: id)
 
         for entry in sorted {
             let server = PlexServer(

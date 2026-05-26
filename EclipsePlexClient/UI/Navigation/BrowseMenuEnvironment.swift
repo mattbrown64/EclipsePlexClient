@@ -5,7 +5,7 @@
 
 import SwiftUI
 
-/// Opens the browse menu (sheet on iPhone / compact, sidebar on regular split).
+/// Opens the browse menu (overlay on iPhone / compact, sidebar on regular split).
 struct OpenBrowseMenuAction {
     var open: () -> Void
 }
@@ -21,7 +21,7 @@ extension EnvironmentValues {
     }
 }
 
-/// Closes the browse menu (sheet on iPhone / compact, sidebar on split).
+/// Closes the browse menu (overlay on iPhone / compact, sidebar on split).
 struct DismissBrowseMenuAction {
     var dismiss: () -> Void
 }
@@ -54,7 +54,7 @@ struct BrowseToolbarButton: View {
 extension View {
     /// iPhone / compact iPad only — macOS split view already exposes the system sidebar toggle.
     func browseMenuToolbar() -> some View {
-#if os(iOS)
+#if os(iOS) || os(tvOS)
         toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 BrowseToolbarButton()

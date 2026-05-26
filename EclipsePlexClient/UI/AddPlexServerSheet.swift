@@ -254,9 +254,15 @@ struct AddPlexServerSheet: View {
         errorMessage = nil
         defer { isWorking = false }
 
-        let hostTrim = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hostTrim: String
+        do {
+            hostTrim = try PlexNetworkPolicy.validateHostDescription(host)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let tokenTrim = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !hostTrim.isEmpty, !tokenTrim.isEmpty else {
+        guard !tokenTrim.isEmpty else {
             errorMessage = "Enter both an address and a token."
             return
         }

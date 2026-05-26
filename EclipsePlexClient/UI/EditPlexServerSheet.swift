@@ -17,13 +17,14 @@ struct EditPlexServerSheet: View {
     @State private var token: String
     @State private var isWorking = false
     @State private var errorMessage: String?
+    @State private var showConnectionPicker = false
 
     init(registry: PlexServerRegistry, server: PlexServer) {
         self.registry = registry
         self.server = server
         _name = State(initialValue: server.name)
         _host = State(initialValue: server.hostDescription)
-        _token = State(initialValue: server.accessToken ?? "")
+        _token = State(initialValue: KeychainStore.token(forServerID: server.id) ?? server.accessToken ?? "")
     }
 
     var body: some View {
@@ -33,6 +34,11 @@ struct EditPlexServerSheet: View {
                     TextField("Name", text: $name)
                     TextField("URL (https://host:32400)", text: $host)
                     SecureField("Plex token", text: $token)
+                    if server.connectionCandidates.count > 1 {
+                        Button("Choose connection…") {
+                            showConnectionPicker = true
+                        }
+                    }
                 }
                 if let errorMessage {
                     Section {
@@ -59,6 +65,9 @@ struct EditPlexServerSheet: View {
         #if os(macOS)
         .frame(minWidth: 420, minHeight: 220)
         #endif
+        .sheet(isPresented: $showConnectionPicker) {
+            ServerConnectionPickerSheet(server: server, registry: registry)
+        }
     }
 
     @MainActor
@@ -69,9 +78,16 @@ struct EditPlexServerSheet: View {
 
         var updated = server
         updated.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        updated.hostDescription = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         updated.accessToken = trimmedToken.isEmpty ? nil : trimmedToken
+
+        do {
+            let validatedHost = try PlexNetworkPolicy.validateHostDescription(host)
+            updated.hostDescription = validatedHost
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
 
         do {
             let probe = PlexServer(

@@ -91,8 +91,6 @@ nonisolated enum PlexSampleData {
             return episodeNodes(for: library, seasonRatingKey: seasonKey)
         case .collection, .playlist:
             return []
-        case .collection, .playlist:
-            return []
         }
     }
 

@@ -89,7 +89,7 @@ struct ServerSearchView: View {
                     parent: .season(ratingKey: season.ratingKey),
                     navigationTitle: season.title
                 )
-            case .movie, .episode, .musicTrack:
+            case .movie, .episode, .musicTrack, .photo:
                 MediaDetailView(plexServer: plexServer, library: hit.library, node: hit.node)
             }
         }

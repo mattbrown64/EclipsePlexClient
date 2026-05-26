@@ -8,6 +8,10 @@ import SwiftUI
 /// Single sidebar: sources, then Home + libraries for the selected source (catalog stays in the detail column).
 struct AppSidebarView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+#if os(tvOS)
+    @FocusState private var tvSidebarFocusedRowID: String?
+#endif
 
     let deviceServers: [PlexServer]
     let plexServers: [PlexServer]
@@ -33,13 +37,38 @@ struct AppSidebarView: View {
     var activeDownloadCount: Int = 0
     var onSelectAllServersHome: () -> Void = {}
     var onSelectSettings: () -> Void = {}
+    var onRetryLibraries: () -> Void = {}
     var isAggregateHomeSelected: Bool = false
 
     private var isHomeSelected: Bool {
         selectedLibraryID == nil && !isAggregateHomeSelected
     }
 
+    private var sidebarFocusRows: [SidebarFocusRow] {
+        buildSidebarFocusRows()
+    }
+
     var body: some View {
+        ScrollViewReader { scrollProxy in
+            sidebarList
+                .onChange(of: focusCoordinator.sidebarFocusedIndex) { _, _ in
+                    scrollSidebarFocus(into: scrollProxy)
+#if os(tvOS)
+                    syncTVSidebarFocusFromCoordinator()
+#endif
+                }
+                .onChange(of: focusCoordinator.route) { _, route in
+                    if route == .sidebar {
+                        scrollSidebarFocus(into: scrollProxy)
+#if os(tvOS)
+                        syncTVSidebarFocusFromCoordinator()
+#endif
+                    }
+                }
+        }
+    }
+
+    private var sidebarList: some View {
         List {
             Section {
                 HStack {
@@ -53,7 +82,12 @@ struct AppSidebarView: View {
             if !deviceServers.isEmpty {
                 Section {
                     ForEach(deviceServers) { server in
-                        serverButton(server, isReachable: nil, badge: activeDownloadCount)
+                        serverButton(
+                            server,
+                            focusRowID: FocusRowID.downloadsServer(server.id),
+                            isReachable: nil,
+                            badge: activeDownloadCount
+                        )
                     }
                 } header: {
                     Text("Downloads")
@@ -69,6 +103,7 @@ struct AppSidebarView: View {
                     title: "Home",
                     systemImage: "house.circle",
                     subtitle: "All servers",
+                    focusRowID: FocusRowID.aggregateHome,
                     isSelected: isAggregateHomeSelected
                 ) {
                     onSelectAllServersHome()
@@ -77,17 +112,21 @@ struct AppSidebarView: View {
 
             Section("Plex servers") {
                 ForEach(plexServers) { server in
-                    serverButton(server, isReachable: serverReachable(server.id))
-                        .contextMenu {
-                            if isUserAddedServer(server.id) {
-                                Button("Edit Server…") {
-                                    onEditServer(server)
-                                }
-                                Button("Remove Server", role: .destructive) {
-                                    onRemoveServer(server.id)
-                                }
+                    serverButton(
+                        server,
+                        focusRowID: FocusRowID.plexServer(server.id),
+                        isReachable: serverReachable(server.id)
+                    )
+                    .contextMenu {
+                        if isUserAddedServer(server.id) {
+                            Button("Edit Server…") {
+                                onEditServer(server)
+                            }
+                            Button("Remove Server", role: .destructive) {
+                                onRemoveServer(server.id)
                             }
                         }
+                    }
                 }
             }
 
@@ -97,6 +136,7 @@ struct AppSidebarView: View {
                         title: "Home",
                         systemImage: "house",
                         subtitle: "Continue Watching & hubs",
+                        focusRowID: FocusRowID.serverHome,
                         isSelected: isHomeSelected
                     ) {
                         onSelectHome()
@@ -112,9 +152,15 @@ struct AppSidebarView: View {
                     }
 
                     if showsLibrariesError, let librariesLoadError {
-                        Text(librariesLoadError)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(librariesLoadError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                            Button("Retry") {
+                                onRetryLibraries()
+                            }
                             .font(.caption)
-                            .foregroundStyle(.red)
+                        }
                     }
 
                     ForEach(libraries) { library in
@@ -122,6 +168,7 @@ struct AppSidebarView: View {
                             title: library.title,
                             systemImage: icon(for: library),
                             subtitle: nil,
+                            focusRowID: FocusRowID.library(library.id),
                             isSelected: selectedLibraryID == library.id
                         ) {
                             onSelectLibrary(library)
@@ -133,6 +180,7 @@ struct AppSidebarView: View {
                             title: "Playlists",
                             systemImage: "music.note.list",
                             subtitle: "Server playlists",
+                            focusRowID: FocusRowID.playlists,
                             isSelected: false
                         ) {
                             onSelectPlaylists()
@@ -146,12 +194,22 @@ struct AppSidebarView: View {
                     title: "Settings",
                     systemImage: "gearshape",
                     subtitle: nil,
+                    focusRowID: FocusRowID.settings,
                     isSelected: false
                 ) {
                     onSelectSettings()
                 }
             }
         }
+#if os(tvOS)
+        .tvBrowseFocusSection(.sidebar)
+#endif
+        .onAppear { syncSidebarFocusRows() }
+        .onChange(of: selectedServerID) { _, _ in syncSidebarFocusRows() }
+        .onChange(of: selectedLibraryID) { _, _ in syncSidebarFocusRows() }
+        .onChange(of: libraries.map(\.id)) { _, _ in syncSidebarFocusRows() }
+        .onChange(of: plexServers.map(\.id)) { _, _ in syncSidebarFocusRows() }
+        .onChange(of: deviceServers.map(\.id)) { _, _ in syncSidebarFocusRows() }
         .navigationTitle("Browse")
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -166,7 +224,28 @@ struct AppSidebarView: View {
 #endif
     }
 
-    private func serverButton(_ server: PlexServer, isReachable: Bool?, badge: Int = 0) -> some View {
+    private func syncSidebarFocusRows() {
+        focusCoordinator.setSidebarRows(sidebarFocusRows)
+#if os(tvOS)
+        syncTVSidebarFocusFromCoordinator()
+#endif
+    }
+
+#if os(tvOS)
+    private func syncTVSidebarFocusFromCoordinator() {
+        guard focusCoordinator.route == .sidebar,
+              focusCoordinator.sidebarRows.indices.contains(focusCoordinator.sidebarFocusedIndex)
+        else { return }
+        tvSidebarFocusedRowID = focusCoordinator.sidebarRows[focusCoordinator.sidebarFocusedIndex].id
+    }
+#endif
+
+    private func serverButton(
+        _ server: PlexServer,
+        focusRowID: String,
+        isReachable: Bool?,
+        badge: Int = 0
+    ) -> some View {
         Button {
             onSelectServer(server.id)
         } label: {
@@ -201,12 +280,38 @@ struct AppSidebarView: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
+        .id(focusRowID)
+        .browseFocusHighlight(
+            active: isSidebarFocusActive(
+                rowID: focusRowID,
+                rows: sidebarFocusRows,
+                coordinator: focusCoordinator
+            ),
+            chrome: .sidebarRow
+        )
+        .accessibilityLabel(server.name)
+        .accessibilityHint("Select server")
+        .accessibilityIdentifier(focusRowID)
+#if os(tvOS)
+        .focused($tvSidebarFocusedRowID, equals: focusRowID)
+#endif
+    }
+
+    private func scrollSidebarFocus(into proxy: ScrollViewProxy) {
+        guard focusCoordinator.route == .sidebar,
+              focusCoordinator.sidebarRows.indices.contains(focusCoordinator.sidebarFocusedIndex)
+        else { return }
+        let rowID = focusCoordinator.sidebarRows[focusCoordinator.sidebarFocusedIndex].id
+        withAnimation(.easeInOut(duration: 0.2)) {
+            proxy.scrollTo(rowID, anchor: .center)
+        }
     }
 
     private func rowButton(
         title: String,
         systemImage: String,
         subtitle: String?,
+        focusRowID: String,
         isSelected: Bool,
         action: @escaping () -> Void
     ) -> some View {
@@ -231,6 +336,22 @@ struct AppSidebarView: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
+        .id(focusRowID)
+        .browseFocusHighlight(
+            active: isSidebarFocusActive(
+                rowID: focusRowID,
+                rows: sidebarFocusRows,
+                coordinator: focusCoordinator
+            ),
+            chrome: .sidebarRow
+        )
+        .accessibilityLabel(title)
+        .accessibilityHint(subtitle ?? "Open")
+        .accessibilityIdentifier(focusRowID)
+#if os(tvOS)
+        .buttonStyle(.plain)
+        .focused($tvSidebarFocusedRowID, equals: focusRowID)
+#endif
     }
 
     private func icon(for library: PlexLibrary) -> String {

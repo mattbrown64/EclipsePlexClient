@@ -11,6 +11,8 @@ struct ServerPlaylistsView: View {
 
     @State private var playlists: [PlexPlaylistSummary]?
     @State private var loadError: String?
+    @State private var showCreate = false
+    @State private var newPlaylistTitle = ""
 
     @Environment(\.catalogNavigationActions) private var navigationActions
 
@@ -23,34 +25,52 @@ struct ServerPlaylistsView: View {
             } else if let playlists, playlists.isEmpty {
                 ContentUnavailableView("No playlists", systemImage: "music.note.list", description: Text("This server has no video playlists yet."))
             } else if let playlists {
-                List(playlists) { playlist in
-                    Button {
-                        navigationActions.pushRoute(
-                            .playlistItems(playlistKey: playlist.ratingKey, title: playlist.title)
-                        )
-                    } label: {
-                        HStack(spacing: 12) {
-                            CatalogArtworkImage(
-                                plexServer: plexServer,
-                                thumbPath: playlist.thumbPath,
-                                style: .list
+                List {
+                    ForEach(playlists) { playlist in
+                        Button {
+                            navigationActions.pushRoute(
+                                .playlistItems(playlistKey: playlist.ratingKey, title: playlist.title)
                             )
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(playlist.title)
-                                if let summary = playlist.summary, !summary.isEmpty {
-                                    Text(summary)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
+                        } label: {
+                            HStack(spacing: 12) {
+                                CatalogArtworkImage(
+                                    plexServer: plexServer,
+                                    thumbPath: playlist.thumbPath,
+                                    style: .list
+                                )
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(playlist.title)
+                                    if let summary = playlist.summary, !summary.isEmpty {
+                                        Text(summary)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                    }
                                 }
                             }
                         }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    .onDelete(perform: deletePlaylists)
                 }
             }
         }
         .navigationTitle("Playlists")
+        .browseMenuToolbar()
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showCreate = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+            }
+        }
+        .alert("New playlist", isPresented: $showCreate) {
+            TextField("Title", text: $newPlaylistTitle)
+            Button("Create") { Task { await createPlaylist() } }
+            Button("Cancel", role: .cancel) { newPlaylistTitle = "" }
+        }
         .task { await reload() }
         .refreshable { await reload() }
     }
@@ -63,11 +83,37 @@ struct ServerPlaylistsView: View {
             return
         }
         do {
-            let client = try PlexMediaServerClient(server: plexServer)
+            let client = try PlexMediaServerClient(server: plexServer.withActiveConnection())
             playlists = try await client.fetchPlaylists()
         } catch {
             loadError = error.localizedDescription
             playlists = []
+        }
+    }
+
+    @MainActor
+    private func createPlaylist() async {
+        let title = newPlaylistTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        newPlaylistTitle = ""
+        do {
+            let client = try PlexMediaServerClient(server: plexServer.withActiveConnection())
+            _ = try await client.createPlaylist(title: title, librarySectionID: 1)
+            await reload()
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    private func deletePlaylists(at offsets: IndexSet) {
+        guard let playlists else { return }
+        Task {
+            let client = try? PlexMediaServerClient(server: plexServer.withActiveConnection())
+            for index in offsets {
+                let key = playlists[index].ratingKey
+                try? await client?.deletePlaylist(playlistKey: key)
+            }
+            await reload()
         }
     }
 }
@@ -76,6 +122,7 @@ struct ServerPlaylistsView: View {
 struct LibraryCollectionsView: View {
     let plexServer: PlexServer
     let library: PlexLibrary
+    var embedInLibraryShell: Bool = false
 
     @State private var collections: [PlexCollectionSummary]?
     @State private var loadError: String?
@@ -110,7 +157,7 @@ struct LibraryCollectionsView: View {
                 }
             }
         }
-        .navigationTitle("Collections")
+        .modifier(CollectionsChrome(embedInLibraryShell: embedInLibraryShell))
         .task { await reload() }
         .refreshable { await reload() }
     }
@@ -123,7 +170,7 @@ struct LibraryCollectionsView: View {
             return
         }
         do {
-            let client = try PlexMediaServerClient(server: plexServer)
+            let client = try PlexMediaServerClient(server: plexServer.withActiveConnection())
             collections = try await client.fetchLibraryCollections(library: library)
         } catch {
             loadError = error.localizedDescription
@@ -133,11 +180,25 @@ struct LibraryCollectionsView: View {
 }
 
 /// Items inside a playlist or collection (reuses catalog list UI).
+private struct CollectionsChrome: ViewModifier {
+    let embedInLibraryShell: Bool
+
+    func body(content: Content) -> some View {
+        if embedInLibraryShell {
+            content
+        } else {
+            content.navigationTitle("Collections")
+        }
+    }
+}
+
 struct PlaylistOrCollectionItemsView: View {
     let plexServer: PlexServer
     let library: PlexLibrary
     let parent: PlexCatalogParent
     let navigationTitle: String
+
+    @EnvironmentObject private var playbackQueue: PlaybackQueueManager
 
     var body: some View {
         CatalogListView(
@@ -146,5 +207,14 @@ struct PlaylistOrCollectionItemsView: View {
             parent: parent,
             navigationTitle: navigationTitle
         )
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    playbackQueue.shuffle()
+                } label: {
+                    Label("Shuffle", systemImage: "shuffle")
+                }
+            }
+        }
     }
 }

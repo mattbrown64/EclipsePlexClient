@@ -17,30 +17,46 @@ final class PlexServerRegistry: ObservableObject {
     /// Last reachability probe per server (`nil` = unknown).
     @Published private(set) var serverReachable: [UUID: Bool] = [:]
 
+    func setServerReachable(_ reachable: Bool?, for serverID: UUID) {
+        serverReachable[serverID] = reachable
+    }
+
     /// Plex.tv account token (PIN sign-in). Used only to refresh the server list, not for PMS calls.
     @Published private(set) var plexAccountAuthToken: String?
 
     private let userDefaultsKey = "plexCustomServers.v1"
-    private let accountTokenKey = "plexAccountAuthToken.v1"
 
     init() {
-        plexAccountAuthToken = UserDefaults.standard.string(forKey: accountTokenKey)
+        KeychainStore.migrateFromUserDefaultsIfNeeded()
+        plexAccountAuthToken = KeychainStore.loadPlexAccountToken()
         loadFromDisk()
+        applyUITestLaunchArgumentsIfNeeded()
+    }
+
+    /// Seeds sample servers/libraries when UI tests pass `-UITestSeedSampleData`.
+    func applyUITestLaunchArgumentsIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-UITestSeedSampleData") else { return }
+        customServers = []
+        librariesByServerID = [:]
+        for server in PlexSampleData.servers {
+            addCustomServer(server)
+            librariesByServerID[server.id] = PlexSampleData.libraries(for: server.id)
+        }
     }
 
     func setPlexAccountToken(_ token: String?) {
         let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
             plexAccountAuthToken = trimmed
-            UserDefaults.standard.set(trimmed, forKey: accountTokenKey)
+            KeychainStore.savePlexAccountToken(trimmed)
         } else {
             plexAccountAuthToken = nil
-            UserDefaults.standard.removeObject(forKey: accountTokenKey)
+            KeychainStore.savePlexAccountToken(nil)
         }
     }
 
     var allServers: [PlexServer] {
-        customServers
+        customServers.map { $0.withTokenFromKeychain() }
     }
 
     func isUserAddedServer(id: UUID) -> Bool {
@@ -49,7 +65,8 @@ final class PlexServerRegistry: ObservableObject {
 
     func updateCustomServer(_ server: PlexServer) {
         guard let idx = customServers.firstIndex(where: { $0.id == server.id }) else { return }
-        customServers[idx] = server
+        persistToken(server.accessToken, for: server.id)
+        customServers[idx] = server.persistedWithoutToken
         saveToDisk()
     }
 
@@ -57,13 +74,15 @@ final class PlexServerRegistry: ObservableObject {
         if let rid = server.plexResourceClientIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines), !rid.isEmpty {
             customServers.removeAll { $0.plexResourceClientIdentifier == rid }
         }
-        customServers.append(server)
+        persistToken(server.accessToken, for: server.id)
+        customServers.append(server.persistedWithoutToken)
         librariesByServerID[server.id] = nil
         saveToDisk()
     }
 
     func removeCustomServer(id: UUID) {
         customServers.removeAll { $0.id == id }
+        KeychainStore.setToken(nil, forServerID: id)
         librariesByServerID[id] = nil
         if librariesLoadErrorServerID == id {
             librariesLoadError = nil
@@ -73,6 +92,7 @@ final class PlexServerRegistry: ObservableObject {
     }
 
     func refreshLibraries(for server: PlexServer) async {
+        let server = server.withTokenFromKeychain()
         guard server.usesLivePlexAPI else {
             librariesByServerID[server.id] = nil
             if librariesLoadErrorServerID == server.id {
@@ -108,8 +128,6 @@ final class PlexServerRegistry: ObservableObject {
             librariesByServerID[server.id] = nil
             librariesLoadError = firstError.localizedDescription
             librariesLoadErrorServerID = server.id
-            librariesLoadError = firstError.localizedDescription
-            librariesLoadErrorServerID = server.id
         }
     }
 
@@ -123,12 +141,12 @@ final class PlexServerRegistry: ObservableObject {
             let servers = try await PlexAccountAPI.fetchMediaServers(accountToken: token)
             guard let match = servers.first(where: { $0.plexResourceClientIdentifier == rid }) else { return nil }
             customServers[idx].hostDescription = match.hostDescription
-            customServers[idx].accessToken = match.accessToken
+            persistToken(match.accessToken, for: customServers[idx].id)
             if !match.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 customServers[idx].name = match.name
             }
             saveToDisk()
-            return customServers[idx]
+            return customServers[idx].withTokenFromKeychain()
         } catch {
             return nil
         }
@@ -137,11 +155,24 @@ final class PlexServerRegistry: ObservableObject {
     private func loadFromDisk() {
         guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
               let decoded = try? JSONDecoder().decode([PlexServer].self, from: data) else { return }
-        customServers = decoded
+        customServers = decoded.map { $0.persistedWithoutToken }
+        if decoded.contains(where: { ($0.accessToken?.isEmpty == false) }) {
+            saveToDisk()
+        }
     }
 
     private func saveToDisk() {
-        guard let data = try? JSONEncoder().encode(customServers) else { return }
+        let stripped = customServers.map { $0.persistedWithoutToken }
+        guard let data = try? JSONEncoder().encode(stripped) else { return }
         UserDefaults.standard.set(data, forKey: userDefaultsKey)
+    }
+
+    private func persistToken(_ token: String?, for serverID: UUID) {
+        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            KeychainStore.setToken(trimmed, forServerID: serverID)
+        } else {
+            KeychainStore.setToken(nil, forServerID: serverID)
+        }
     }
 }

@@ -6,6 +6,7 @@ struct ContentView: View {
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
 
     @StateObject private var playerChrome = PlayerChromeController()
     @State private var activeRequest: PlaybackRequest?
@@ -41,17 +42,21 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
         .navigationBarBackButtonHidden(true)
-        .navigationTitle(playerWindowTitle)
         .onAppear {
             if activeRequest == nil {
                 activeRequest = request
             }
+            focusCoordinator.browseKeyboardCommandsEnabled = false
+            focusCoordinator.route = .player
+        }
+        .onDisappear {
+            focusCoordinator.browseKeyboardCommandsEnabled = true
         }
 #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(playerChrome.isVisible ? .visible : .hidden, for: .navigationBar)
-        .toolbarBackground(playerChrome.isVisible ? .automatic : .hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .persistentSystemOverlays(playerChrome.isVisible ? .automatic : .hidden)
+        .ignoresSafeArea(.container, edges: .vertical)
 #endif
         .task(id: activeRequest) {
             PlaybackScrobbleReporter.resetSession()
@@ -100,39 +105,18 @@ struct ContentView: View {
             loadingMessage = "Preparing video…"
         }
 
-        NSLog("[EclipsePlex] ContentView preparing playback…")
         do {
             if case .plex = req {
                 loadingMessage = "Reading Plex metadata…"
             }
-            let offlineFileURL = resolveOfflineFileURL(for: req)
-            resolvedPlayback = try await PlaybackResolver.resolve(
-                req,
-                offlineFileURL: offlineFileURL
+            resolvedPlayback = try await ContentViewPlaybackLoader.resolvePlayback(
+                request: req,
+                downloadManager: downloadManager
             )
-            NSLog("[EclipsePlex] ContentView playback URL ready")
         } catch {
-            NSLog("[EclipsePlex] ContentView playback failed: %@", error.localizedDescription)
+            AppLog.playback("ContentView playback failed: \(error.localizedDescription)")
             loadError = PlaybackErrorMessages.friendly(error.localizedDescription)
         }
-    }
-
-    /// Look up the download on disk when playback starts (not when the navigation link was created).
-    private func resolveOfflineFileURL(for request: PlaybackRequest) -> URL? {
-        guard case .downloadedPlexItem(let server, let ratingKey, _) = request else {
-            return nil
-        }
-        guard let record = downloadManager.playableRecord(serverId: server.id, ratingKey: ratingKey),
-              let url = downloadManager.localFileURL(for: record)
-        else {
-            NSLog(
-                "[EclipsePlex] Offline file missing for server=%@ ratingKey=%@",
-                server.id.uuidString,
-                ratingKey
-            )
-            return nil
-        }
-        return url
     }
 }
 
@@ -193,9 +177,12 @@ private struct VideoPlaybackView: View {
     var body: some View {
         ZStack {
             playerLayer
-            tapToToggleLayer
+            if !chrome.isVisible {
+                tapToToggleLayer
+            }
             if chrome.isVisible {
                 chromeOverlay
+                    .zIndex(1)
             }
             blockingOverlays
             playNextOverlay
@@ -203,6 +190,9 @@ private struct VideoPlaybackView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
+#if os(iOS)
+        .ignoresSafeArea(.container, edges: .vertical)
+#endif
         .onChange(of: isPlayNextOverlayVisible) { _, showing in
             chrome.setPinned(showing)
             if showing {
@@ -256,37 +246,10 @@ private struct VideoPlaybackView: View {
                 chrome.bumpActivity()
             }
         }
-        .background {
-            Button("", action: vlcController.togglePlayPause)
-                .keyboardShortcut(.space, modifiers: [])
-                .opacity(0)
-                .frame(width: 0, height: 0)
-            Button("", action: exitPlayback)
-                .keyboardShortcut(.escape, modifiers: [])
-                .opacity(0)
-                .frame(width: 0, height: 0)
-            if nextEpisodeCandidate != nil {
-                Button("", action: playNextManually)
-                    .keyboardShortcut("n", modifiers: [])
-                    .opacity(0)
-                    .frame(width: 0, height: 0)
-            }
-            if previousEpisodeCandidate != nil {
-                Button("", action: playPreviousManually)
-                    .keyboardShortcut("p", modifiers: [])
-                    .opacity(0)
-                    .frame(width: 0, height: 0)
-            }
-            Button("", action: { seekBy(seconds: -10) })
-                .keyboardShortcut(",", modifiers: [])
-                .opacity(0)
-                .frame(width: 0, height: 0)
-            Button("", action: { seekBy(seconds: 10) })
-                .keyboardShortcut(".", modifiers: [])
-                .opacity(0)
-                .frame(width: 0, height: 0)
-        }
         #endif
+        .background {
+            playbackKeyboardCaptureButtons
+        }
     }
 
     @ViewBuilder
@@ -359,8 +322,9 @@ private struct VideoPlaybackView: View {
             onSkipMarker: performPendingSkip,
             onExit: exitPlayback,
             onInteraction: { chrome.bumpActivity() },
+            onBackgroundTap: { chrome.toggle() },
             topTrailing: {
-                #if os(iOS)
+                #if os(iOS) || os(tvOS)
                 PlaybackSettingsControls(
                     playback: playback,
                     canReloadStream: canReloadStream,
@@ -378,6 +342,47 @@ private struct VideoPlaybackView: View {
                 platformTransportControls
             }
         )
+    }
+
+    @ViewBuilder
+    private var playbackKeyboardCaptureButtons: some View {
+#if os(iOS) || os(macOS)
+        #if os(macOS)
+        Button("", action: vlcController.togglePlayPause)
+            .keyboardShortcut(.space, modifiers: [])
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        #else
+        Button("", action: togglePlayPause)
+            .keyboardShortcut(.space, modifiers: [])
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        #endif
+        Button("", action: exitPlayback)
+            .keyboardShortcut(.escape, modifiers: [])
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        if nextEpisodeCandidate != nil {
+            Button("", action: playNextManually)
+                .keyboardShortcut("n", modifiers: [])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+        }
+        if previousEpisodeCandidate != nil {
+            Button("", action: playPreviousManually)
+                .keyboardShortcut("p", modifiers: [])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+        }
+        Button("", action: { seekBy(seconds: -10) })
+            .keyboardShortcut(",", modifiers: [])
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        Button("", action: { seekBy(seconds: 10) })
+            .keyboardShortcut(".", modifiers: [])
+            .opacity(0)
+            .frame(width: 0, height: 0)
+#endif
     }
 
     @ViewBuilder
@@ -404,19 +409,19 @@ private struct VideoPlaybackView: View {
                 onInteraction: { chrome.bumpActivity() },
                 onSettingsEngage: engageSettingsChrome
             )
-        #else
+        #elseif os(iOS) || os(tvOS)
         IOSVLCPlaybackControls(
             proxy: vlcProxy,
             positionMs: $positionMs,
             durationMs: durationMs,
             isPlaying: isPlaying,
-            nextEpisode: nextEpisodeCandidate,
-            onPlayNext: playNextManually,
             subtitleTracks: vlcSubtitleTracks,
             selectedSubtitleIndex: selectedSubtitleIndex,
             audioTracks: vlcAudioTracks,
             selectedAudioIndex: selectedAudioIndex,
             formattedResolution: formattedResolution,
+            nextEpisode: nextEpisodeCandidate,
+            onPlayNext: playNextManually,
             onPlayPause: {
                 chrome.bumpActivity()
                 togglePlayPause()
@@ -572,7 +577,7 @@ private struct VideoPlaybackView: View {
         #if os(macOS)
         vlcController.seek(toMs: ms)
         #else
-        vlcProxy.setTime(.absolute(ms))
+        vlcProxy.setTime(.ticks(ms))
         #endif
     }
 
@@ -697,7 +702,7 @@ private struct VideoPlaybackView: View {
             previousEpisodeCandidate = try await previous
             nextEpisodeContext = context
         } catch {
-            NSLog("[EclipsePlex] Adjacent episode prefetch failed: %@", error.localizedDescription)
+            AppLog.playback("Adjacent episode prefetch failed: \(error.localizedDescription)")
         }
     }
 
@@ -719,12 +724,7 @@ private struct VideoPlaybackView: View {
         playNextCountdown = 15
         startPlayNextCountdown()
         if let next = nextEpisodeCandidate {
-            NSLog(
-                "[EclipsePlex] Play next: offering S%dE%d — %@",
-                next.seasonNumber,
-                next.episodeNumber,
-                next.title
-            )
+            AppLog.playbackDebug("Play next: S\(next.seasonNumber)E\(next.episodeNumber) — \(next.title)")
         }
     }
 
@@ -964,7 +964,15 @@ private struct VideoPlaybackView: View {
     #endif
 }
 
-#if os(iOS)
+#if os(iOS) || os(tvOS)
+private extension View {
+    /// Minimum 48pt targets so transport buttons work above the home indicator.
+    func playbackControlHitTarget() -> some View {
+        frame(minWidth: 48, minHeight: 48)
+            .contentShape(Rectangle())
+    }
+}
+
 /// Transport bar for VLCUI on iOS (mirrors macOS controls).
 private struct IOSVLCPlaybackControls: View {
     @ObservedObject var proxy: VLCVideoPlayer.Proxy
@@ -995,6 +1003,12 @@ private struct IOSVLCPlaybackControls: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 48, alignment: .trailing)
 
+                #if os(tvOS)
+                Text("\(format(ms: positionMs)) / \(format(ms: durationMs))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                #else
                 Slider(
                     value: $scrubberMs,
                     in: 0 ... max(Double(durationMs), 1),
@@ -1007,6 +1021,7 @@ private struct IOSVLCPlaybackControls: View {
                     }
                 )
                 .disabled(durationMs <= 0)
+                #endif
 
                 Text(format(ms: durationMs))
                     .font(.caption.monospacedDigit())
@@ -1021,16 +1036,22 @@ private struct IOSVLCPlaybackControls: View {
                 } label: {
                     Image(systemName: "gobackward.10")
                 }
+                .playbackControlHitTarget()
+
                 Button(action: onPlayPause) {
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                         .font(.title2)
                 }
+                .playbackControlHitTarget()
+                .accessibilityLabel(isPlaying ? "Pause" : "Play")
+
                 Button {
                     onInteraction()
                     proxy.jumpForward(10)
                 } label: {
                     Image(systemName: "goforward.10")
                 }
+                .playbackControlHitTarget()
 
                 if let next = nextEpisode, let onPlayNext {
                     Button {
@@ -1091,7 +1112,7 @@ private struct IOSVLCPlaybackControls: View {
             .labelStyle(.iconOnly)
         }
         .padding(.horizontal)
-        .padding(.bottom, 12)
+        .padding(.bottom, 4)
         .onChange(of: positionMs) { _, position in
             if !isScrubbing {
                 scrubberMs = Double(position)
@@ -1130,6 +1151,7 @@ private extension VLCVideoPlayer.State {
 #Preview {
     NavigationStack {
     ContentView()
+        .environmentObject(KeyboardFocusCoordinator())
     }
     .environmentObject(OfflineDownloadManager())
 }

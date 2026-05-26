@@ -16,43 +16,25 @@ struct HomeDetailView: View {
     @State private var recentlyAdded: [PlexCatalogSearchHit] = []
     @State private var hubsError: String?
     @State private var isLoadingHubs = false
-    @State private var showSearch = false
+
+    @Environment(\.openServerSearch) private var openServerSearch
     @State private var showFileImporter = false
     @State private var localPlayback: LocalFilePlayback?
 
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    @Environment(\.catalogNavigationActions) private var catalogNavigation
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                headerSection
-
-                if let plexServer, plexServer.usesLivePlexAPI {
-                    if isLoadingHubs, continueWatching.isEmpty, recentlyAdded.isEmpty {
-                        ProgressView("Loading from Plex…")
-                            .frame(maxWidth: .infinity)
-                    }
-                    if let hubsError {
-                        Text(hubsError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                    HubRowView(
-                        title: "Continue Watching",
-                        hits: continueWatching,
-                        plexServer: plexServer
-                    )
-                    HubRowView(
-                        title: "Recently Added",
-                        hits: recentlyAdded,
-                        plexServer: plexServer
-                    )
-                }
-
-                Text("Choose a library in the sidebar to browse its full catalog.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                homeScrollContent
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
+#if os(tvOS)
+            .tvBrowseFocusSection(.homeHubs)
+#endif
+            .onChange(of: focusCoordinator.homeFocusedIndex) { _, index in
+                scrollHomeSelection(to: index, proxy: scrollProxy)
+            }
         }
         .navigationTitle("Home")
 #if os(iOS)
@@ -63,16 +45,12 @@ struct HomeDetailView: View {
             if plexServer?.usesLivePlexAPI == true {
                 ToolbarItem(placement: .automatic) {
                     Button {
-                        showSearch = true
+                        openServerSearch?.open()
                     } label: {
                         Label("Search", systemImage: "magnifyingglass")
                     }
+                    .accessibilityIdentifier("serverSearchButton")
                 }
-            }
-        }
-        .sheet(isPresented: $showSearch) {
-            if let plexServer {
-                ServerSearchView(plexServer: plexServer, libraries: libraries)
             }
         }
         .refreshable {
@@ -81,6 +59,16 @@ struct HomeDetailView: View {
         .task(id: hubTaskKey) {
             await loadHubs()
         }
+        .onAppear {
+            syncHomeFocusState()
+            focusCoordinator.focusHome()
+        }
+        .onDisappear {
+            focusCoordinator.clearHomeItems()
+        }
+        .onChange(of: continueWatching.count) { _, _ in syncHomeFocusState() }
+        .onChange(of: recentlyAdded.count) { _, _ in syncHomeFocusState() }
+#if os(iOS)
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [.movie, .mpeg4Movie, .quickTimeMovie, .video, .audiovisualContent],
@@ -98,7 +86,55 @@ struct HomeDetailView: View {
                 AppToastCenter.show(error.localizedDescription)
             }
         }
+#endif
         .modifier(LocalFilePlaybackPresentation(playback: $localPlayback))
+    }
+
+    private var homeScrollContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
+                headerSection
+
+                if let plexServer, plexServer.usesLivePlexAPI {
+                    if isLoadingHubs, continueWatching.isEmpty, recentlyAdded.isEmpty {
+                        ProgressView("Loading from Plex…")
+                            .frame(maxWidth: .infinity)
+                    }
+                    if let hubsError {
+                        Text(hubsError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    HubRowView(
+                        title: "Continue Watching",
+                        hits: continueWatching,
+                        plexServer: plexServer,
+                        shelfKey: "\(plexServer.id.uuidString)|cw",
+                        homeFocusRangeStart: 0
+                    )
+                    HubRowView(
+                        title: "Recently Added",
+                        hits: recentlyAdded,
+                        plexServer: plexServer,
+                        shelfKey: "\(plexServer.id.uuidString)|ra",
+                        homeFocusRangeStart: continueWatching.count
+                    )
+                }
+
+                Text("Choose a library in the sidebar to browse its full catalog.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func scrollHomeSelection(to index: Int, proxy: ScrollViewProxy) {
+        guard focusCoordinator.route == .homeHubs,
+              focusCoordinator.homeItems.indices.contains(index)
+        else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            proxy.scrollTo(focusCoordinator.homeItems[index].id, anchor: .center)
+        }
     }
 
     private var hubTaskKey: String {
@@ -129,6 +165,21 @@ struct HomeDetailView: View {
                 Label("Add Plex Server", systemImage: "plus.circle.fill")
             }
             .buttonStyle(.borderedProminent)
+
+            if let plexServer, plexServer.usesLivePlexAPI {
+                Button {
+                    catalogNavigation.pushRoute(.liveTV)
+                } label: {
+                    Label("Live TV", systemImage: "antenna.radiowaves.left.and.right")
+                }
+                .buttonStyle(.bordered)
+                if plexServer.connectionCandidates.count > 1 {
+                    Text("Connection: \(plexServer.activeHostDescription)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
 
             Button {
                 showFileImporter = true
@@ -162,6 +213,30 @@ struct HomeDetailView: View {
             recentlyAdded = []
             AppToastCenter.show("Couldn’t load home hubs: \(error.localizedDescription)")
         }
+        syncHomeFocusState()
+    }
+
+    private func syncHomeFocusState() {
+        guard let plexServer, plexServer.usesLivePlexAPI else {
+            focusCoordinator.clearHomeItems()
+            return
+        }
+        var items: [HomeFocusItem] = []
+        HomeHubFocus.appendItems(
+            into: &items,
+            shelfKey: "\(plexServer.id.uuidString)|cw",
+            hits: continueWatching,
+            plexServer: plexServer,
+            navigation: catalogNavigation
+        )
+        HomeHubFocus.appendItems(
+            into: &items,
+            shelfKey: "\(plexServer.id.uuidString)|ra",
+            hits: recentlyAdded,
+            plexServer: plexServer,
+            navigation: catalogNavigation
+        )
+        focusCoordinator.setHomeItems(items)
     }
 }
 

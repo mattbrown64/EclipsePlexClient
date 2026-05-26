@@ -17,10 +17,16 @@ struct DownloadControls: View {
 
     @State private var isEnqueueing = false
     @State private var batchError: String?
+#if os(iOS)
+    @State private var fullscreenPlayback: PlaybackPresentationItem?
+#endif
 
     var body: some View {
         if let downloadManager {
             downloadBody(downloadManager)
+#if os(iOS)
+                .eclipsePlexFullscreenPlayback(item: $fullscreenPlayback)
+#endif
         }
     }
 
@@ -83,22 +89,32 @@ struct DownloadControls: View {
         }
     }
 
+    @ViewBuilder
     private func offlinePlayLink(downloadManager: OfflineDownloadManager, label: String) -> some View {
-        NavigationLink {
-            ContentView(
-                request: .downloadedPlexItem(
-                    server: plexServer,
-                    ratingKey: ratingKey,
-                    title: title
-                )
-            )
-            .environment(\.offlineDownloads, downloadManager)
-            .environmentObject(downloadManager)
-            .onAppear { dismissBrowseMenu?.dismiss() }
+        let request = PlaybackRequest.downloadedPlexItem(
+            server: plexServer,
+            ratingKey: ratingKey,
+            title: title
+        )
+#if os(iOS)
+        Button {
+            dismissBrowseMenu?.dismiss()
+            fullscreenPlayback = PlaybackPresentationItem(request: request)
         } label: {
             Label(label, systemImage: "play.circle")
         }
         .buttonStyle(.borderedProminent)
+#else
+        NavigationLink {
+            ContentView(request: request)
+                .environment(\.offlineDownloads, downloadManager)
+                .environmentObject(downloadManager)
+                .onAppear { dismissBrowseMenu?.dismiss() }
+        } label: {
+            Label(label, systemImage: "play.circle")
+        }
+        .buttonStyle(.borderedProminent)
+#endif
     }
 
     @MainActor

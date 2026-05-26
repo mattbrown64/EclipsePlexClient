@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  deployment-targets:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify deployment target alignment
+        run: chmod +x scripts/check-deployment-targets.sh && ./scripts/check-deployment-targets.sh
+
+  macos-test:
+    runs-on: macos-15
+    needs: deployment-targets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: Pods
+          key: pods-${{ hashFiles('Podfile.lock') }}
+          restore-keys: pods-
+
+      - name: Install CocoaPods dependencies
+        run: pod install
+
+      - name: Fetch macOS VLCKit
+        run: ./scripts/fetch-vlckit-macos.sh
+
+      - name: Build and test (macOS unit)
+        run: |
+          xcodebuild -workspace EclipsePlexClient.xcworkspace \
+            -scheme EclipsePlexClient \
+            -destination 'platform=macOS' \
+            -only-testing:EclipsePlexClientTests \
+            test
+
+  ios-unit-test:
+    runs-on: macos-15
+    needs: deployment-targets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: Pods
+          key: pods-${{ hashFiles('Podfile.lock') }}
+          restore-keys: pods-
+
+      - name: Install CocoaPods dependencies
+        run: pod install
+
+      - name: Fetch macOS VLCKit
+        run: ./scripts/fetch-vlckit-macos.sh
+
+      - name: Unit tests (iPhone Simulator)
+        run: |
+          xcodebuild -workspace EclipsePlexClient.xcworkspace \
+            -scheme EclipsePlexClient \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:EclipsePlexClientTests \
+            test
+
+  ios-ui-test:
+    runs-on: macos-15
+    needs: deployment-targets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: Pods
+          key: pods-${{ hashFiles('Podfile.lock') }}
+          restore-keys: pods-
+
+      - name: Install CocoaPods dependencies
+        run: pod install
+
+      - name: Fetch macOS VLCKit
+        run: ./scripts/fetch-vlckit-macos.sh
+
+      - name: UI tests (iPhone Simulator)
+        run: |
+          xcodebuild -workspace EclipsePlexClient.xcworkspace \
+            -scheme EclipsePlexClient \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:EclipsePlexClientUITests/BrowseNavigationUITests \
+            test
+
+  tvos-compile:
+    runs-on: macos-15
+    needs: deployment-targets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: Pods
+          key: pods-${{ hashFiles('Podfile.lock') }}
+          restore-keys: pods-
+
+      - name: Install CocoaPods dependencies
+        run: pod install
+
+      - name: Fetch tvOS VLCKit
+        run: ./scripts/fetch-tvvlckit.sh
+
+      - name: Build (tvOS Simulator)
+        run: |
+          xcodebuild -workspace EclipsePlexClient.xcworkspace \
+            -scheme EclipsePlexClient \
+            -destination 'platform=tvOS Simulator,name=Apple TV' \
+            build

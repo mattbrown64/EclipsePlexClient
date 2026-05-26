@@ -105,6 +105,21 @@ enum PlaybackPreferences {
     private static let resolutionKey = "playback.videoResolution.v1"
     private static let subtitleKey = "playback.subtitleSelection.v1"
     private static let speedKey = "playback.speed.v1"
+    private static let directPlayLANKey = "playback.preferDirectPlayLAN.v1"
+    private static let preferHLSKey = "playback.preferHLS.v1"
+
+    static var preferDirectPlayOnLAN: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: directPlayLANKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: directPlayLANKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: directPlayLANKey) }
+    }
+
+    static var preferHLSTranscode: Bool {
+        get { UserDefaults.standard.bool(forKey: preferHLSKey) }
+        set { UserDefaults.standard.set(newValue, forKey: preferHLSKey) }
+    }
 
     static func load() -> PlaybackStreamOptions {
         let defaults = UserDefaults.standard

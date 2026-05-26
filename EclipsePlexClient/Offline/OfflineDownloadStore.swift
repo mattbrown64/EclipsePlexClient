@@ -5,6 +5,20 @@
 
 import Foundation
 
+enum OfflineDownloadStoreError: LocalizedError {
+    case missingStoreURL
+    case encodeFailed
+    case writeFailed(underlying: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingStoreURL: return "Could not locate offline download storage."
+        case .encodeFailed: return "Could not save download list."
+        case .writeFailed(let underlying): return "Could not write downloads: \(underlying.localizedDescription)"
+        }
+    }
+}
+
 enum OfflineDownloadStore {
     private static let fileName = "offlineDownloads.v1.json"
 
@@ -16,12 +30,18 @@ enum OfflineDownloadStore {
         return decoded
     }
 
-    static func save(_ records: [OfflineDownloadRecord]) {
-        guard let url = storeURL else { return }
+    static func save(_ records: [OfflineDownloadRecord]) throws {
+        guard let url = storeURL else { throw OfflineDownloadStoreError.missingStoreURL }
         let dir = url.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        guard let data = try? JSONEncoder().encode(records) else { return }
-        try? data.write(to: url, options: .atomic)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(records) else {
+            throw OfflineDownloadStoreError.encodeFailed
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            throw OfflineDownloadStoreError.writeFailed(underlying: error)
+        }
     }
 
     static var downloadsDirectory: URL {

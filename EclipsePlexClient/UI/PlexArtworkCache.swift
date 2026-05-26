@@ -64,6 +64,12 @@ enum PlexArtworkCache {
         }
     }
 
+    static func clearAll() {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let folder = base.appendingPathComponent(subdirectory, isDirectory: true)
+        try? FileManager.default.removeItem(at: folder)
+    }
+
     private static func fileURL(for url: URL) -> URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         let folder = base.appendingPathComponent(subdirectory, isDirectory: true)

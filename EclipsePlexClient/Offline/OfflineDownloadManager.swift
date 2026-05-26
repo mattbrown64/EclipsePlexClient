@@ -15,6 +15,7 @@ final class OfflineDownloadManager: ObservableObject {
     @Published private(set) var isOnWiFi = true
     /// Smoothed bytes/sec for the active transfer (UI only).
     @Published private(set) var transferSpeedByRecordID: [UUID: Double] = [:]
+    @Published private(set) var persistError: String?
 
     private var activeDownloadID: UUID?
     private var activeDownloadSession: URLSession?
@@ -286,6 +287,32 @@ final class OfflineDownloadManager: ObservableObject {
         persist()
     }
 
+    /// Removes all completed download files.
+    func deleteAllCompleted() {
+        let ids = records.filter { $0.state == .completed }.map(\.id)
+        for id in ids { delete(id: id) }
+    }
+
+    /// Re-queues failed downloads.
+    func retryFailedDownloads() {
+        for index in records.indices where records[index].state == .failed {
+            records[index].state = .pending
+            records[index].errorMessage = nil
+        }
+        persist()
+        Task { await pumpQueue() }
+    }
+
+    var totalDownloadBytes: Int64 {
+        records.compactMap { record -> Int64? in
+            guard let url = localFileURL(for: record),
+                  let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = attrs[.size] as? Int64
+            else { return nil }
+            return size
+        }.reduce(0, +)
+    }
+
     func server(for record: OfflineDownloadRecord) -> PlexServer? {
         servers().first { $0.id == record.serverId }
     }
@@ -377,7 +404,7 @@ final class OfflineDownloadManager: ObservableObject {
 
         let title = records.first(where: { $0.id == recordID })?.title ?? recordID.uuidString
         updateRecord(id: recordID) { $0.progress = 0 }
-        NSLog("[EclipsePlex] Download started: \"%@\"", title)
+        AppLog.offline("Download started: \(title)")
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let delegate = OfflineDownloadSessionDelegate(
@@ -387,7 +414,7 @@ final class OfflineDownloadManager: ObservableObject {
                 manager: self,
                 continuation: continuation
             )
-            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            let session = Self.makeDownloadURLSession(delegate: delegate)
             activeDownloadDelegate = delegate
             activeDownloadSession = session
             let task = session.downloadTask(with: request)
@@ -405,11 +432,7 @@ final class OfflineDownloadManager: ObservableObject {
             $0.expectedBytes = size > 0 ? size : $0.expectedBytes
             $0.progress = 1
         }
-        NSLog(
-            "[EclipsePlex] Download finished: \"%@\" · %@",
-            title,
-            OfflineDownloadProgressFormatter.bytes(size)
-        )
+        AppLog.offline("Download finished: \(title) · \(OfflineDownloadProgressFormatter.bytes(size))")
     }
 
     fileprivate func updateDownloadProgress(
@@ -438,17 +461,8 @@ final class OfflineDownloadManager: ObservableObject {
         let now = Date()
         if now.timeIntervalSince(lastProgressLogAt[recordID] ?? .distantPast) >= 1 {
             lastProgressLogAt[recordID] = now
-            NSLog(
-                "[EclipsePlex] Download \"%@\": %@ · %@ · %@",
-                recordTitle,
-                OfflineDownloadProgressFormatter.percent(progress),
-                OfflineDownloadProgressFormatter.speed(speedBytesPerSecond),
-                OfflineDownloadProgressFormatter.progressLine(
-                    progress: progress,
-                    bytesWritten: bytesWritten,
-                    expectedBytes: expectedBytes,
-                    speedBytesPerSecond: nil
-                )
+            AppLog.offlineDebug(
+                "Download \(recordTitle): \(OfflineDownloadProgressFormatter.percent(progress)) · \(OfflineDownloadProgressFormatter.speed(speedBytesPerSecond))"
             )
         }
 
@@ -491,7 +505,7 @@ final class OfflineDownloadManager: ObservableObject {
 
     private func fail(id: UUID, message: String) {
         let title = records.first(where: { $0.id == id })?.title ?? id.uuidString
-        NSLog("[EclipsePlex] Download failed: \"%@\" — %@", title, message)
+        AppLog.offline("Download failed: \(title) — \(message)")
         transferSpeedByRecordID.removeValue(forKey: id)
         lastProgressLogAt.removeValue(forKey: id)
         lastPersistAt.removeValue(forKey: id)
@@ -564,8 +578,23 @@ final class OfflineDownloadManager: ObservableObject {
     }
 
     private func persist() {
-        OfflineDownloadStore.save(records)
-        catalogRevision &+= 1
+        do {
+            try OfflineDownloadStore.save(records)
+            persistError = nil
+            catalogRevision &+= 1
+        } catch {
+            persistError = error.localizedDescription
+            CrashReporter.record(message: "Offline persist failed: \(error.localizedDescription)", category: "offline")
+            AppLog.offline("Persist failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func makeDownloadURLSession(delegate: URLSessionDownloadDelegate) -> URLSession {
+        #if os(iOS)
+        URLSession(configuration: OfflineDownloadBackgroundSession.makeConfiguration(), delegate: delegate, delegateQueue: nil)
+        #else
+        URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        #endif
     }
 
     private func updateRecord(id: UUID, mutate: (inout OfflineDownloadRecord) -> Void) {

@@ -1,17 +1,31 @@
 # CocoaPods (MobileVLCKit for iOS)
 Pods/
-*.xcworkspace/xcuserdata/
 
-# Optional: omit large macOS binary (run scripts/fetch-vlckit-macos.sh)
-# Frameworks/VLCKit.xcframework/
+# Optional: omit large binaries (run scripts/fetch-vlckit-*.sh)
+Frameworks/VLCKit.xcframework/
+Frameworks/TVVLCKit.xcframework/
+
+# Local build / fetch staging
+.build/
+DerivedData/
+build/
 
 # Xcode user data
-*.xcodeproj/xcuserdata/
-*.xcodeproj/project.xcworkspace/xcuserdata/
+**/xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+
+# Editor / local AI
+.vscode/
+.cursor/
 
 # macOS
 .DS_Store
+**/.DS_Store
 
 # Local test videos (not bundled in the app)
 EclipsePlexClient/*.mp4
 EclipsePlexClient/*.mkv
+EclipsePlexClient/Savior.mkv

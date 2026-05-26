@@ -13,15 +13,48 @@ struct AggregateHomeDetailView: View {
     var onSelectServer: (UUID) -> Void = { _ in }
 
     @EnvironmentObject private var plexRegistry: PlexServerRegistry
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    @Environment(\.catalogNavigationActions) private var catalogNavigation
+
     @State private var shelves: [AggregateHomeShelf] = []
     @State private var isLoading = false
     @State private var loadGeneration = 0
 
-    @Environment(\.catalogNavigationActions) private var catalogNavigation
-
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                aggregateScrollContent
+            }
+#if os(tvOS)
+            .tvBrowseFocusSection(.homeHubs)
+#endif
+            .onChange(of: focusCoordinator.homeFocusedIndex) { _, index in
+                scrollHomeSelection(to: index, proxy: scrollProxy)
+            }
+        }
+        .navigationTitle("Home")
+#if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+#endif
+        .browseMenuToolbar()
+        .refreshable {
+            await reloadShelves(invalidateCache: true)
+        }
+        .task(id: reloadTaskKey) {
+            await reloadShelves(invalidateCache: false)
+        }
+        .onAppear {
+            syncHomeFocusState()
+            focusCoordinator.focusHome()
+        }
+        .onDisappear {
+            focusCoordinator.clearHomeItems()
+        }
+        .onChange(of: shelves.map(\.server.id)) { _, _ in syncHomeFocusState() }
+    }
+
+    private var aggregateScrollContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
                 EclipsePlexBrandingHeader(layout: .hero, subtitle: "All servers")
 
                 if isLoading, shelves.isEmpty {
@@ -29,8 +62,8 @@ struct AggregateHomeDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
 
-                ForEach(shelves, id: \.server.id) { shelf in
-                    serverShelf(shelf)
+                ForEach(Array(shelves.enumerated()), id: \.element.server.id) { shelfIndex, shelf in
+                    serverShelf(shelf, shelfIndex: shelfIndex)
                 }
 
                 if plexServers.isEmpty {
@@ -54,17 +87,14 @@ struct AggregateHomeDetailView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .navigationTitle("Home")
-#if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-#endif
-        .browseMenuToolbar()
-        .refreshable {
-            await reloadShelves(invalidateCache: true)
-        }
-        .task(id: reloadTaskKey) {
-            await reloadShelves(invalidateCache: false)
+    }
+
+    private func scrollHomeSelection(to index: Int, proxy: ScrollViewProxy) {
+        guard focusCoordinator.route == .homeHubs,
+              focusCoordinator.homeItems.indices.contains(index)
+        else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            proxy.scrollTo(focusCoordinator.homeItems[index].id, anchor: .center)
         }
     }
 
@@ -76,7 +106,9 @@ struct AggregateHomeDetailView: View {
     }
 
     @ViewBuilder
-    private func serverShelf(_ shelf: AggregateHomeShelf) -> some View {
+    private func serverShelf(_ shelf: AggregateHomeShelf, shelfIndex: Int) -> some View {
+        let rangeStart = homeFocusRangeStart(forShelfIndex: shelfIndex)
+        let cwCount = shelf.continueWatching.count
         VStack(alignment: .leading, spacing: 12) {
             Text(shelf.server.name)
                 .font(.title3.weight(.semibold))
@@ -87,19 +119,53 @@ struct AggregateHomeDetailView: View {
                     .foregroundStyle(.red)
             }
 
-            AggregateHubRowView(
+            HubRowView(
                 title: "Continue Watching",
                 hits: shelf.continueWatching,
                 plexServer: shelf.server,
+                shelfKey: "\(shelf.server.id.uuidString)|cw",
+                homeFocusRangeStart: rangeStart,
                 onSelectServer: onSelectServer
             )
-            AggregateHubRowView(
+            HubRowView(
                 title: "Recently Added",
                 hits: shelf.recentlyAdded,
                 plexServer: shelf.server,
+                shelfKey: "\(shelf.server.id.uuidString)|ra",
+                homeFocusRangeStart: rangeStart + cwCount,
                 onSelectServer: onSelectServer
             )
         }
+    }
+
+    private func homeFocusRangeStart(forShelfIndex shelfIndex: Int) -> Int {
+        guard shelfIndex > 0 else { return 0 }
+        return shelves.prefix(shelfIndex).reduce(0) { partial, shelf in
+            partial + shelf.continueWatching.count + shelf.recentlyAdded.count
+        }
+    }
+
+    private func syncHomeFocusState() {
+        var items: [HomeFocusItem] = []
+        for shelf in shelves {
+            HomeHubFocus.appendItems(
+                into: &items,
+                shelfKey: "\(shelf.server.id.uuidString)|cw",
+                hits: shelf.continueWatching,
+                plexServer: shelf.server,
+                navigation: catalogNavigation,
+                onSelectServer: onSelectServer
+            )
+            HomeHubFocus.appendItems(
+                into: &items,
+                shelfKey: "\(shelf.server.id.uuidString)|ra",
+                hits: shelf.recentlyAdded,
+                plexServer: shelf.server,
+                navigation: catalogNavigation,
+                onSelectServer: onSelectServer
+            )
+        }
+        focusCoordinator.setHomeItems(items)
     }
 
     @MainActor
@@ -120,56 +186,6 @@ struct AggregateHomeDetailView: View {
         )
         guard generation == loadGeneration else { return }
         shelves = loaded
-    }
-}
-
-/// Hub row that selects the hit's server before navigating.
-private struct AggregateHubRowView: View {
-    let title: String
-    let hits: [PlexCatalogSearchHit]
-    let plexServer: PlexServer
-    var onSelectServer: (UUID) -> Void
-
-    @Environment(\.catalogNavigationActions) private var catalogNavigation
-
-    var body: some View {
-        if hits.isEmpty {
-            EmptyView()
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(title)
-                    .font(.headline)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
-                        ForEach(hits) { hit in
-                            Button {
-                                onSelectServer(plexServer.id)
-                                catalogNavigation.selectLibrary(hit.library)
-                                catalogNavigation.pushRoute(hubRoute(for: hit))
-                            } label: {
-                                HubTileView(plexServer: plexServer, hit: hit)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    private func hubRoute(for hit: PlexCatalogSearchHit) -> CatalogNavigationRoute {
-        switch hit.node {
-        case .show(let show):
-            return .showDetail(library: hit.library, show: show)
-        case .season(let season):
-            return .browse(
-                library: hit.library,
-                parent: .season(ratingKey: season.ratingKey),
-                navigationTitle: season.title
-            )
-        case .movie, .episode, .musicTrack:
-            return .media(library: hit.library, node: hit.node)
-        }
+        syncHomeFocusState()
     }
 }

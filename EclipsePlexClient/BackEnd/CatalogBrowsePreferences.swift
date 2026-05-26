@@ -5,6 +5,48 @@
 
 import Foundation
 
+/// Top-level tabs when browsing a library at its root (official Plex-style).
+nonisolated enum LibraryRootTab: String, Sendable, CaseIterable, Identifiable {
+    case recommended
+    case browse
+    case collections
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .recommended: "Recommended"
+        case .browse: "Browse"
+        case .collections: "Collections"
+        }
+    }
+}
+
+nonisolated enum LibraryBrowsePreferences {
+    static func rootTabStorageKey(serverId: UUID, libraryId: String) -> String {
+        "libraryRootTab.v1.\(serverId.uuidString).\(libraryId)"
+    }
+
+    static func loadRootTab(serverId: UUID, libraryId: String) -> LibraryRootTab? {
+        guard let raw = UserDefaults.standard.string(forKey: rootTabStorageKey(serverId: serverId, libraryId: libraryId)) else {
+            return nil
+        }
+        return LibraryRootTab(rawValue: raw)
+    }
+
+    static func saveRootTab(_ tab: LibraryRootTab, serverId: UUID, libraryId: String) {
+        UserDefaults.standard.set(tab.rawValue, forKey: rootTabStorageKey(serverId: serverId, libraryId: libraryId))
+    }
+
+    static func showsCollectionsTab(sectionType: PlexSectionType) -> Bool {
+        sectionType == .movie || sectionType == .show
+    }
+
+    static func showsRecommendedTab(sectionType: PlexSectionType, usesLiveAPI: Bool) -> Bool {
+        usesLiveAPI && (sectionType == .movie || sectionType == .show || sectionType == .music)
+    }
+}
+
 nonisolated enum CatalogViewMode: String, Sendable, CaseIterable, Identifiable {
     case list
     case grid

@@ -94,7 +94,7 @@ struct PlaybackSettingsControls: View {
 }
 #endif
 
-#if os(iOS)
+#if os(iOS) || os(tvOS)
 struct PlaybackSettingsControls: View {
     let playback: ResolvedPlayback
     let canReloadStream: Bool

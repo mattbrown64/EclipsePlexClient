@@ -21,8 +21,8 @@ def scope_xcconfig_to_ios(xcconfig_path)
   File.write(xcconfig_path, xcconfig)
 end
 
-IOS_ONLY_SCRIPT_GUARD = <<~'SH'
-  if [[ "${PLATFORM_NAME}" != "iphoneos" && "${PLATFORM_NAME}" != "iphonesimulator" ]]; then
+UIKIT_VLC_SCRIPT_GUARD = <<~'SH'
+  if [[ "${PLATFORM_NAME}" != "iphoneos" && "${PLATFORM_NAME}" != "iphonesimulator" && "${PLATFORM_NAME}" != "appletvos" && "${PLATFORM_NAME}" != "appletvsimulator" ]]; then
     exit 0
   fi
 SH
@@ -38,7 +38,7 @@ def limit_pods_scripts_to_ios(installer)
 
         next if phase.shell_script&.include?('PLATFORM_NAME')
 
-        phase.shell_script = IOS_ONLY_SCRIPT_GUARD + phase.shell_script.to_s
+        phase.shell_script = UIKIT_VLC_SCRIPT_GUARD + phase.shell_script.to_s
       end
     end
     user_project.save
@@ -75,7 +75,8 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
-      config.build_settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
+      config.build_settings['TVOS_DEPLOYMENT_TARGET'] = '17.0'
+      config.build_settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator appletvos appletvsimulator'
     end
   end
 
@@ -104,7 +105,7 @@ def add_mobilevlckit_prepare_phase(installer)
 
       phase = target.new_shell_script_build_phase('Prepare MobileVLCKit (iOS)')
       phase.shell_script = <<~SCRIPT
-        if [[ "${PLATFORM_NAME}" != "iphoneos" && "${PLATFORM_NAME}" != "iphonesimulator" ]]; then
+        if [[ "${PLATFORM_NAME}" != "iphoneos" && "${PLATFORM_NAME}" != "iphonesimulator" && "${PLATFORM_NAME}" != "appletvos" && "${PLATFORM_NAME}" != "appletvsimulator" ]]; then
           exit 0
         fi
         "${SRCROOT}/scripts/prepare-mobilevlckit-ios.sh"

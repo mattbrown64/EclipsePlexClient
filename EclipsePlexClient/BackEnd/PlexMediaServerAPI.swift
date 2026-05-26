@@ -41,7 +41,7 @@ nonisolated enum PlexHTTPConstants {
     }
 
     static let productName = "EclipsePlexClient"
-    static let productVersion = "1.0"
+    static var productVersion: String { AppVersion.marketingVersion }
 }
 
 // MARK: - JSON DTOs
@@ -406,8 +406,10 @@ nonisolated struct PlexMediaServerClient: Sendable {
 
     func catalogNodeForRecord(_ r: PlexRecordDTO, libraryOrder: Int) -> PlexCatalogNode? {
         switch r.kind {
-        case .movie, .photo:
+        case .movie:
             return mapMovie(r, libraryOrder: libraryOrder)
+        case .photo:
+            return mapPhoto(r, libraryOrder: libraryOrder)
         case .show, .artist:
             return mapShow(r, libraryOrder: libraryOrder)
         case .season:
@@ -425,8 +427,20 @@ nonisolated struct PlexMediaServerClient: Sendable {
         }
     }
 
+    func mapPhoto(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexCatalogNode? {
+        guard let rk = r.ratingKey, r.kind == .photo else { return nil }
+        var summary = PlexPhotoSummary(
+            ratingKey: rk,
+            title: r.displayTitle,
+            thumbPath: r.thumb
+        )
+        summary.libraryOrder = libraryOrder
+        summary.addedAt = r.addedAt
+        return .photo(summary)
+    }
+
     func mapMovie(_ r: PlexRecordDTO, libraryOrder: Int = 0) -> PlexCatalogNode? {
-        guard let rk = r.ratingKey, r.kind == .movie || r.kind == .photo || r.kind == .unknown else { return nil }
+        guard let rk = r.ratingKey, r.kind == .movie || r.kind == .unknown else { return nil }
         if r.kind == .show || r.kind == .season || r.kind == .episode { return nil }
         var summary = PlexMovieSummary(
             ratingKey: rk,
@@ -631,8 +645,9 @@ nonisolated struct PlexMediaServerClient: Sendable {
     }
 
     /// One HTTP request (one page).
-    func fetchOnePage(path: String, query: [URLQueryItem]) async throws -> PlexMediaContainerDecoded {
-        let req = try makeRequest(path: path, query: query)
+    func fetchOnePage(path: String, query: [URLQueryItem], method: String = "GET") async throws -> PlexMediaContainerDecoded {
+        var req = try makeRequest(path: path, query: query)
+        req.httpMethod = method
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else {
             throw PlexAPIError.decodingFailed("Invalid response.")
@@ -675,125 +690,5 @@ nonisolated struct PlexMediaServerClient: Sendable {
         request.setValue(PlexHTTPConstants.productVersion, forHTTPHeaderField: "X-Plex-Product-Version")
         return request
     }
-
-    // MARK: - Playback
-
-    /// Resolved stream location for VLC / AVFoundation.
-    nonisolated struct PlexPlaybackStream: Sendable {
-        let url: URL
-        let delivery: PlexPlaybackDelivery
-        let httpHeaderFields: [String: String]
-    }
-
-    nonisolated enum PlexPlaybackDelivery: String, Sendable {
-        case directPlay
-        case transcodeHLS
-        case transcodeHTTP
-    }
-
-    /// Resolves a playable URL for VLC. Avoids blocking on transcode/decision endpoints (they can take minutes).
-    func resolvePlaybackStream(ratingKey: String, server: PlexServer) async throws -> PlexPlaybackStream {
-        NSLog("[EclipsePlex Plex] resolve start ratingKey=%@", ratingKey)
-        let sources = try await fetchPlaybackSources(ratingKey: ratingKey)
-        let sessionID = UUID().uuidString
-        let vlcHeaders = server.vlcHTTPHeaderFields
-
-        NSLog(
-            "[EclipsePlex Plex] metadata path=%@ part=%@ indirect=%@ mediaIndex=%d",
-            sources.metadataPath,
-            sources.partKey ?? "(none)",
-            sources.isIndirect ? "yes" : "no",
-            sources.mediaIndex
-        )
-
-        if !sources.isIndirect, let partPath = sources.partKey {
-            NSLog("[EclipsePlex Plex] direct play URL for VLC → %@", partPath)
-            let request = try makeStreamRequest(path: partPath, query: [])
-            return PlexPlaybackStream(
-                url: request.url!,
-                delivery: .directPlay,
-                httpHeaderFields: vlcHeaders
-            )
-        }
-
-        // MKV over HTTP transcode — works better with VLC than HLS + long query strings.
-        NSLog("[EclipsePlex Plex] building MKV transcode URL for VLC…")
-        let mkvQuery = server.plexTranscodeQueryItems(
-            sessionID: sessionID,
-            metadataPath: sources.metadataPath,
-            mediaIndex: sources.mediaIndex,
-            partIndex: sources.partIndex,
-            protocol: "http",
-            directPlay: "0",
-            directStream: "1"
-        )
-        return try makeTranscodeStream(
-            endpoint: "/video/:/transcode/universal/start.mkv",
-            query: mkvQuery,
-            vlcHeaders: vlcHeaders,
-            label: "MKV remux",
-            delivery: .transcodeHTTP
-        )
-    }
-
-    func makeTranscodeStream(
-        endpoint: String,
-        query: [URLQueryItem],
-        vlcHeaders: [String: String],
-        label: String,
-        delivery: PlexPlaybackDelivery
-    ) throws -> PlexPlaybackStream {
-        let request = try makeStreamRequest(path: endpoint, query: query)
-        if let url = request.url {
-            NSLog("[EclipsePlex Plex] %@ → %@", label, redactedURL(url))
-        }
-        return PlexPlaybackStream(url: request.url!, delivery: delivery, httpHeaderFields: vlcHeaders)
-    }
-
-    func makeStreamRequest(
-        path: String,
-        query: [URLQueryItem],
-        accept: String = "*/*"
-    ) throws -> URLRequest {
-        var request = try makeRequest(path: path, query: query)
-        request.setValue(accept, forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 15
-        return request
-    }
-
-    private func redactedURL(_ url: URL?) -> String {
-        guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return "(invalid url)"
-        }
-        if components.queryItems?.contains(where: { $0.name == "X-Plex-Token" }) == true {
-            components.queryItems = components.queryItems?.map { item in
-                item.name == "X-Plex-Token" ? URLQueryItem(name: item.name, value: "•••") : item
-            }
-        }
-        return components.string ?? url.absoluteString
-    }
-
-    func fetchPlaybackSources(ratingKey: String) async throws -> PlexPlaybackXMLParser.Sources {
-        NSLog("[EclipsePlex Plex] fetching metadata…")
-        var request = try makeRequest(path: "/library/metadata/\(ratingKey)", query: [])
-        request.setValue("application/xml", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 15
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw PlexAPIError.decodingFailed("Invalid response.")
-        }
-        guard (200 ..< 300).contains(http.statusCode) else {
-            let snippet = String(data: data, encoding: .utf8).map { String($0.prefix(280)) }
-            throw PlexAPIError.httpStatus(code: http.statusCode, bodySnippet: snippet)
-        }
-
-        guard let xml = String(data: data, encoding: .utf8),
-              let sources = PlexPlaybackXMLParser.parse(xml, ratingKey: ratingKey)
-        else {
-            throw PlexAPIError.decodingFailed("Could not read Plex media parts for playback.")
-        }
-        return sources
-    }
-
 }
+

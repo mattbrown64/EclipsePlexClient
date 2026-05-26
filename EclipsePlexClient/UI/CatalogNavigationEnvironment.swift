@@ -9,6 +9,7 @@ import SwiftUI
 struct CatalogNavigationActions {
     var selectLibrary: (PlexLibrary) -> Void = { _ in }
     var pushRoute: (CatalogNavigationRoute) -> Void = { _ in }
+    var popRoute: () -> Void = {}
 }
 
 private struct CatalogNavigationActionsKey: EnvironmentKey {

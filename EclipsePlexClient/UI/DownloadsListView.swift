@@ -35,10 +35,21 @@ struct DownloadsListView: View {
                         OfflineDownloadPreferences.wifiOnly = value
                         Task { await downloadManager.pumpQueueIfAllowed() }
                     }
+#if os(tvOS)
+                Picker("Storage cap", selection: $storageCapGB) {
+                    ForEach([5, 10, 25, 50, 100, 200, 500], id: \.self) { gb in
+                        Text("\(gb) GB").tag(gb)
+                    }
+                }
+                .onChange(of: storageCapGB) { _, value in
+                    OfflineDownloadPreferences.storageCapGB = value
+                }
+#else
                 Stepper("Storage cap: \(storageCapGB) GB", value: $storageCapGB, in: 5 ... 500, step: 5)
                     .onChange(of: storageCapGB) { _, value in
                         OfflineDownloadPreferences.storageCapGB = value
                     }
+#endif
                 Toggle("Prune watched when over cap", isOn: $pruneWatched)
                     .onChange(of: pruneWatched) { _, value in
                         OfflineDownloadPreferences.pruneWatchedWhenOverCap = value

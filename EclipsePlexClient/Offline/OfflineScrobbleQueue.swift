@@ -18,6 +18,12 @@ enum OfflineScrobbleQueue {
         let createdAt: Date
     }
 
+    /// Whether queued entries can be sent to this Plex server.
+    nonisolated static func canFlush(to server: PlexServer) -> Bool {
+        guard !server.isDownloadsServer else { return false }
+        return (try? PlexMediaServerClient(server: server)) != nil
+    }
+
     static func enqueue(
         serverId: UUID,
         ratingKey: String,
@@ -40,7 +46,7 @@ enum OfflineScrobbleQueue {
             )
         )
         save(entries)
-        NSLog("[EclipsePlex] Queued offline scrobble for ratingKey=%@", ratingKey)
+        AppLog.offlineDebug("Queued offline scrobble ratingKey=\(ratingKey)")
     }
 
     @MainActor
@@ -51,7 +57,7 @@ enum OfflineScrobbleQueue {
         var remaining: [Entry] = []
         for entry in entries {
             guard let server = servers.first(where: { $0.id == entry.serverId }),
-                  server.usesLivePlexAPI
+                  canFlush(to: server)
             else {
                 remaining.append(entry)
                 continue
@@ -69,9 +75,9 @@ enum OfflineScrobbleQueue {
                         timeMs: entry.positionMs
                     )
                 }
-                NSLog("[EclipsePlex] Flushed offline scrobble ratingKey=%@", entry.ratingKey)
+                AppLog.offlineDebug("Flushed offline scrobble ratingKey=\(entry.ratingKey)")
             } catch {
-                NSLog("[EclipsePlex] Offline scrobble flush failed: %@", error.localizedDescription)
+                AppLog.offline("Offline scrobble flush failed: \(error.localizedDescription)")
                 remaining.append(entry)
             }
         }

@@ -108,6 +108,16 @@ nonisolated struct PlexEpisodeSummary: Identifiable, Hashable, Sendable {
     }
 }
 
+nonisolated struct PlexPhotoSummary: Identifiable, Hashable, Sendable {
+    let ratingKey: String
+    let title: String
+    let thumbPath: String?
+    var libraryOrder: Int = 0
+    var addedAt: Int?
+
+    var id: String { ratingKey }
+}
+
 nonisolated struct PlexMusicTrackSummary: Identifiable, Hashable, Sendable {
     let ratingKey: String
     let title: String
@@ -127,6 +137,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
     case season(PlexSeasonSummary)
     case episode(PlexEpisodeSummary)
     case musicTrack(PlexMusicTrackSummary)
+    case photo(PlexPhotoSummary)
 
     var id: String {
         switch self {
@@ -135,6 +146,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         case .season(let s): return "season:\(s.ratingKey)"
         case .episode(let e): return "episode:\(e.ratingKey)"
         case .musicTrack(let t): return "track:\(t.ratingKey)"
+        case .photo(let p): return "photo:\(p.ratingKey)"
         }
     }
 
@@ -145,6 +157,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         case .season(let s): return s.libraryOrder
         case .episode(let e): return e.libraryOrder
         case .musicTrack(let t): return t.libraryOrder
+        case .photo(let p): return p.libraryOrder
         }
     }
 
@@ -155,6 +168,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         case .season(let s): return s.title
         case .episode(let e): return e.title
         case .musicTrack(let t): return t.title
+        case .photo(let p): return p.title
         }
     }
 
@@ -167,6 +181,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         case .musicTrack(let t):
             let parts = [t.artist, t.album].compactMap { $0 }
             return parts.isEmpty ? "Music" : parts.joined(separator: " · ")
+        case .photo: return "Photo"
         }
     }
 
@@ -177,6 +192,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         case .season(let s): return s.thumbPath
         case .episode(let e): return e.thumbPath
         case .musicTrack(let t): return t.thumbPath
+        case .photo(let p): return p.thumbPath
         }
     }
 
@@ -184,7 +200,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         switch self {
         case .movie(let m): return m.year
         case .show(let s): return s.year
-        case .season, .episode, .musicTrack: return nil
+        case .season, .episode, .musicTrack, .photo: return nil
         }
     }
 
@@ -192,6 +208,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         switch self {
         case .movie(let m): return m.addedAt
         case .show(let s): return s.addedAt
+        case .photo(let p): return p.addedAt
         default: return nil
         }
     }
@@ -217,7 +234,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         case .movie(let m): return m.ratingKey
         case .episode(let e): return e.ratingKey
         case .musicTrack(let t): return t.ratingKey
-        case .show, .season: return nil
+        case .show, .season, .photo: return nil
         }
     }
 
@@ -225,7 +242,7 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         switch self {
         case .movie(let m): return m.watchProgressFraction
         case .episode(let e): return e.watchProgressFraction
-        case .show, .season, .musicTrack: return nil
+        case .show, .season, .musicTrack, .photo: return nil
         }
     }
 
@@ -266,6 +283,7 @@ nonisolated enum CatalogNavigationRoute: Hashable, Sendable {
     case playlistItems(playlistKey: String, title: String)
     case libraryCollections(library: PlexLibrary)
     case collectionItems(collectionKey: String, title: String, library: PlexLibrary)
+    case liveTV
 }
 
 nonisolated struct CatalogPageResult: Sendable {

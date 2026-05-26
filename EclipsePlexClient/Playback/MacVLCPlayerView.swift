@@ -169,11 +169,8 @@ struct MacVLCPlayerView: NSViewRepresentable {
             controller.applySavedPlaybackRate(to: player)
 
             let label = playback.candidates.count > 1 ? candidate.label : candidate.streamKind.debugLabel
-            NSLog(
-                "[EclipsePlex VLC] Opening %@ (%@) → %@",
-                label,
-                url.pathExtension.isEmpty ? "stream" : url.pathExtension,
-                url.host ?? url.absoluteString
+            AppLog.playbackDebug(
+                "VLC opening \(label) (\(url.pathExtension.isEmpty ? "stream" : url.pathExtension)) → \(AppLog.redactURL(url) ?? "stream")"
             )
             let openingStatus = playback.candidates.count > 1
                 ? "Opening (\(candidate.label))…"
@@ -227,7 +224,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
 
             didApplyResumePosition = true
             player.time = VLCTime(number: resumeMs as NSNumber)
-            NSLog("[EclipsePlex VLC] Resumed at %d ms", resumeMs)
+            AppLog.playbackDebug("VLC resumed at \(resumeMs) ms")
             updateStatus { self.statusText.wrappedValue = "Resuming…" }
         }
 
@@ -315,11 +312,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
         private func handlePlaybackFailure(_ message: String) {
             let nextIndex = candidateIndex + 1
             if nextIndex < playback.candidates.count {
-                NSLog(
-                    "[EclipsePlex VLC] Stream failed (%@), trying fallback: %@",
-                    message,
-                    playback.candidates[nextIndex].label
-                )
+                AppLog.playback("VLC stream failed (\(message)), trying fallback: \(playback.candidates[nextIndex].label)")
                 updateStatus {
                     self.statusText.wrappedValue = "Trying \(self.playback.candidates[nextIndex].label)…"
                     self.errorMessage.wrappedValue = nil
@@ -337,7 +330,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
                 self.errorMessage.wrappedValue = friendly
                 self.statusText.wrappedValue = "Error"
             }
-            NSLog("[EclipsePlex VLC] Playback failed: %@", friendly)
+            AppLog.playback("VLC playback failed: \(friendly)")
         }
 
         private func persistPositionPeriodically(from player: VLCMediaPlayer) {

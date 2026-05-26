@@ -1,4 +1,4 @@
-#if os(iOS)
+#if os(iOS) || os(tvOS)
 import SwiftUI
 
 /// iOS VLC player with direct-play → transcode fallback and Plex HTTP headers.

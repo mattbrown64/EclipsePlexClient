@@ -9,7 +9,7 @@ extension PlexServer {
 
     /// Scheme + host + port only, for joining Plex-relative art paths (`/library/metadata/...`).
     nonisolated var plexOriginURL: URL? {
-        let raw = hostDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = activeHostDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
 
         let withScheme: String

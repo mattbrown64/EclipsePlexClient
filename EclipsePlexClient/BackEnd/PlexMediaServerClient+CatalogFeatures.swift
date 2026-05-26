@@ -341,12 +341,48 @@ extension PlexMediaServerClient {
         server: PlexServer,
         quality: PlaybackVideoResolution
     ) async throws -> PlexDownloadSource {
-        let stream = try await resolvePlaybackStream(ratingKey: ratingKey, server: server)
         let title = (try? await fetchMediaDetail(ratingKey: ratingKey).title) ?? "download"
         let safe = title
             .replacingOccurrences(of: "/", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let ext = quality == .original ? "mkv" : "mp4"
+        let vlcHeaders = server.vlcHTTPHeaderFields
+
+        let stream: PlexPlaybackStream
+        if quality == .original {
+            stream = try await resolvePlaybackStream(ratingKey: ratingKey, server: server)
+        } else {
+            let sources = try await fetchPlaybackSources(ratingKey: ratingKey)
+            let sessionID = UUID().uuidString
+            var transcodeQuery = server.plexTranscodeQueryItems(
+                sessionID: sessionID,
+                metadataPath: sources.metadataPath,
+                mediaIndex: sources.mediaIndex,
+                partIndex: sources.partIndex,
+                protocol: "http",
+                directPlay: "0",
+                directStream: "1"
+            )
+            transcodeQuery = transcodeQuery.map { item in
+                if item.name == "videoResolution" {
+                    return URLQueryItem(name: "videoResolution", value: quality.plexVideoResolution)
+                }
+                return item
+            }
+            if !transcodeQuery.contains(where: { $0.name == "videoResolution" }) {
+                transcodeQuery.append(
+                    URLQueryItem(name: "videoResolution", value: quality.plexVideoResolution)
+                )
+            }
+            stream = try makeTranscodeStream(
+                endpoint: "/video/:/transcode/universal/start.mp4",
+                query: transcodeQuery,
+                vlcHeaders: vlcHeaders,
+                label: "Download (\(quality.menuTitle))",
+                delivery: .transcodeHTTP
+            )
+        }
+
         return PlexDownloadSource(
             url: stream.url,
             httpHeaderFields: stream.httpHeaderFields,
@@ -361,7 +397,9 @@ extension PlexMediaServerClient {
         switch parent {
         case .root:
             switch library.sectionType {
-            case .movie, .photo, .show, .other:
+            case .movie, .show, .other:
+                return "/library/sections/\(section)/all"
+            case .photo:
                 return "/library/sections/\(section)/all"
             case .music:
                 return "/library/sections/\(section)/all"
@@ -415,8 +453,10 @@ extension PlexMediaServerClient {
             }
         }
         switch record.kind {
-        case .movie, .photo:
-            return libraries.first(where: { $0.sectionType == .movie || $0.sectionType == .photo })
+        case .movie:
+            return libraries.first(where: { $0.sectionType == .movie })
+        case .photo:
+            return libraries.first(where: { $0.sectionType == .photo })
         case .show, .season, .episode:
             return libraries.first(where: { $0.sectionType == .show })
         case .artist, .album, .track:

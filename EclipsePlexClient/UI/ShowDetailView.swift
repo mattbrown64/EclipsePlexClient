@@ -20,6 +20,10 @@ struct ShowDetailView: View {
     @State private var isLoading = false
     @State private var loadError: String?
 
+    private var childSectionTitle: String {
+        library.sectionType == .music ? "Albums" : "Seasons"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -42,7 +46,7 @@ struct ShowDetailView: View {
                         .foregroundStyle(.red)
                 }
                 if !seasons.isEmpty {
-                    Text("Seasons")
+                    Text(childSectionTitle)
                         .font(.headline)
                     ForEach(seasons) { season in
                         NavigationLink(
@@ -225,7 +229,7 @@ struct ShowDetailView: View {
                 resumeEpisode = .episode(episode)
             }
         } catch {
-            NSLog("[EclipsePlex] Resume episode lookup failed: %@", error.localizedDescription)
+            AppLog.ui("Resume episode lookup failed: \(error.localizedDescription)")
         }
     }
 }

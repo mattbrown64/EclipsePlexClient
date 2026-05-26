@@ -37,7 +37,7 @@ enum PlaybackResolver {
         offlineFileURL: URL? = nil,
         options: PlaybackStreamOptions = .current
     ) async throws -> ResolvedPlayback {
-        NSLog("[EclipsePlex] PlaybackResolver.resolve start")
+        AppLog.playbackDebug("PlaybackResolver.resolve start")
         switch request {
         case .plex(let server, let ratingKey, _, _):
             guard server.usesLivePlexAPI else {
@@ -76,7 +76,7 @@ enum PlaybackResolver {
             guard let fileURL = offlineFileURL else {
                 throw PlaybackResolverError.offlineFileMissing
             }
-            NSLog("[EclipsePlex] Offline playback file: %@", fileURL.path)
+            AppLog.playbackDebug("Offline playback file: \(fileURL.lastPathComponent)")
             let resumeMs = PlaybackPositionStore.load(serverId: server.id, ratingKey: ratingKey)
             return ResolvedPlayback(
                 url: try LocalMediaURL.forPlayback(fileURL),

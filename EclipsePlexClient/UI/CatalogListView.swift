@@ -51,6 +51,8 @@ struct CatalogListView: View {
     let library: PlexLibrary
     let parent: PlexCatalogParent
     let navigationTitle: String
+    /// Embedded in [`LibraryDetailView`](LibraryDetailView.swift) Browse tab (suppress duplicate chrome).
+    var embedInLibraryShell: Bool = false
 
     @State private var searchText = ""
     @State private var sortOrder: CatalogSort = .plexDefault
@@ -69,6 +71,9 @@ struct CatalogListView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.catalogNavigationActions) private var catalogNavigationActions
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
+    @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+
+    @State private var catalogGridColumnCount: Int = 5
 
     private var trimmedSearch: String {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -113,6 +118,18 @@ struct CatalogListView: View {
         Self.sortedNodes(filteredNodes, by: sortOrder)
     }
 
+    private var catalogFocusRegistrationID: String {
+        let parentKey: String
+        switch parent {
+        case .root: parentKey = "root"
+        case .show(let k): parentKey = "show:\(k)"
+        case .season(let k): parentKey = "season:\(k)"
+        case .collection(let k): parentKey = "collection:\(k)"
+        case .playlist(let k): parentKey = "playlist:\(k)"
+        }
+        return "\(plexServer.id.uuidString)|\(library.id)|\(parentKey)"
+    }
+
     private var loadTaskKey: String {
         let parentKey: String
         switch parent {
@@ -144,11 +161,19 @@ struct CatalogListView: View {
         plexServer.usesLivePlexAPI
             && !plexServer.isDownloadsServer
             && parent == .root
-            && (library.sectionType == .movie || library.sectionType == .show)
+            && (library.sectionType == .movie || library.sectionType == .show || library.sectionType == .photo)
     }
 
+    private var isPhotoLibrary: Bool {
+        library.sectionType == .photo && parent == .root
+    }
+
+    @State private var photoSlideshowStartIndex: Int?
+    @State private var showPhotoSlideshow = false
+
     private var showsCollectionsLink: Bool {
-        plexServer.usesLivePlexAPI
+        !embedInLibraryShell
+            && plexServer.usesLivePlexAPI
             && !plexServer.isDownloadsServer
             && parent == .root
             && (library.sectionType == .movie || library.sectionType == .show)
@@ -160,109 +185,212 @@ struct CatalogListView: View {
     }
 
     var body: some View {
+        applyFocusTracking(to: applyCatalogChrome(to: catalogStateContent))
+    }
+
+    @ViewBuilder
+    private var catalogStateContent: some View {
+        if !plexServer.usesLivePlexAPI, !plexServer.isDownloadsServer {
+            #if DEBUG
+            debugFixtureListContent
+            #else
+            ContentUnavailableView {
+                Label("Server not configured", systemImage: "server.rack")
+            } description: {
+                Text("Add a reachable Plex URL and token to browse this library.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #endif
+        } else if liveLoadedNodes == nil, liveLoadError == nil {
+            ProgressView("Loading catalog…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let liveLoadError {
+            ContentUnavailableView {
+                Label("Couldn’t load library", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(liveLoadError)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if displayedNodes.isEmpty {
+            catalogEmptyState
+        } else {
+            listContent
+        }
+    }
+
+    private var catalogEmptyState: some View {
+        ContentUnavailableView {
+            Label("Nothing here", systemImage: "film.stack")
+        } description: {
+            if watchFilter != .all {
+                Text("No \(watchFilter.menuTitle.lowercased()) items in this list. Try changing the watch filter.")
+            } else if !trimmedSearch.isEmpty {
+                Text("No titles match your search.")
+            } else if listFilters.isActive {
+                Text("No titles match the selected genre or year. Try clearing filters.")
+            } else if plexServer.isDownloadsServer {
+                Text("Download movies or episodes from a Plex server to see them here.")
+            } else {
+                Text("This library section is empty.")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func applyCatalogChrome<Content: View>(to content: Content) -> some View {
         Group {
-            if !plexServer.usesLivePlexAPI, !plexServer.isDownloadsServer {
-                #if DEBUG
-                debugFixtureListContent
-                #else
-                ContentUnavailableView {
-                    Label("Server not configured", systemImage: "server.rack")
-                } description: {
-                    Text("Add a reachable Plex URL and token to browse this library.")
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                #endif
-            } else if liveLoadedNodes == nil, liveLoadError == nil {
-                ProgressView("Loading catalog…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let liveLoadError {
-                ContentUnavailableView {
-                    Label("Couldn’t load library", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(liveLoadError)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if displayedNodes.isEmpty {
-                ContentUnavailableView {
-                    Label("Nothing here", systemImage: "film.stack")
-                } description: {
-                    if watchFilter != .all {
-                        Text("No \(watchFilter.menuTitle.lowercased()) items in this list. Try changing the watch filter.")
-                    } else if !trimmedSearch.isEmpty {
-                        Text("No titles match your search.")
-                    } else if listFilters.isActive {
-                        Text("No titles match the selected genre or year. Try clearing filters.")
-                    } else if plexServer.isDownloadsServer {
-                        Text("Download movies or episodes from a Plex server to see them here.")
-                    } else {
-                        Text("This library section is empty.")
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if embedInLibraryShell {
+                content
             } else {
-                listContent
+                content
+                    .navigationTitle(navigationTitle)
+#if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+#endif
             }
         }
-        .navigationTitle(navigationTitle)
-#if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-#endif
-        .searchable(text: $searchText, prompt: Text("Search this list"))
-        .toolbar {
-#if os(iOS)
-            if horizontalSizeClass == .compact {
-                ToolbarItem(placement: .topBarTrailing) {
-                    catalogOptionsMenu
-                }
-            } else {
-                catalogExpandedToolbarItems
+            .searchable(text: $searchText, prompt: Text("Search this list"))
+            .toolbar { catalogToolbarContent }
+            .refreshable { await reloadCatalog() }
+            .task(id: loadTaskKey) { await reloadCatalog() }
+            .onAppear {
+                loadSavedSortOrder()
+                loadSavedWatchFilter()
+                loadSavedListFilters()
+                loadSavedViewMode()
             }
-#else
+            .onChange(of: viewMode) { _, mode in
+                saveViewMode(mode)
+                syncCatalogFocusState()
+            }
+            .confirmDestructive(
+                title: deleteShowConfirmTitle,
+                message: deleteShowConfirmMessage,
+                confirmLabel: "Delete",
+                isPresented: $showDeleteShowConfirm,
+                onConfirm: confirmDeleteShow
+            )
+            .task(id: "\(library.id)|genres") { await loadGenreFiltersIfNeeded() }
+            .onChange(of: sortOrder) { _, newValue in
+                UserDefaults.standard.set(newValue.rawValue, forKey: sortStorageKey)
+            }
+            .onChange(of: watchFilter) { _, newValue in
+                UserDefaults.standard.set(newValue.rawValue, forKey: watchFilterStorageKey)
+            }
+            .onChange(of: listFilters) { _, newValue in
+                saveListFilters(newValue)
+            }
+            .modifier(PhotoSlideshowPresentation(
+                isPresented: $showPhotoSlideshow,
+                plexServer: plexServer,
+                photos: displayedNodes,
+                startIndex: photoSlideshowStartIndex ?? 0
+            ))
+    }
+
+    @ToolbarContentBuilder
+    private var catalogToolbarContent: some ToolbarContent {
+#if os(iOS)
+        if horizontalSizeClass == .compact {
+            ToolbarItem(placement: .topBarTrailing) {
+                catalogOptionsMenu
+            }
+        } else {
             catalogExpandedToolbarItems
+        }
+#else
+        catalogExpandedToolbarItems
 #endif
-        }
-        .refreshable {
-            await reloadCatalog()
-        }
-        .task(id: loadTaskKey) {
-            await reloadCatalog()
-        }
-        .onAppear {
-            loadSavedSortOrder()
-            loadSavedWatchFilter()
-            loadSavedListFilters()
-            loadSavedViewMode()
-        }
-        .onChange(of: viewMode) { _, mode in
-            saveViewMode(mode)
-        }
-        .confirmDestructive(
-            title: "Delete show?",
-            message: "Removes all downloaded episodes for this show from this device.",
-            confirmLabel: "Delete",
-            isPresented: $showDeleteShowConfirm
-        ) {
-            if let key = pendingDeleteShowGroupKey {
-                downloadManager.deleteShow(groupKey: key)
+    }
+
+    private func confirmDeleteShow() {
+        if let key = pendingDeleteShowGroupKey {
+            downloadManager.deleteShow(groupKey: key)
+            if isBrowsingDownloadedShowEpisodes {
+                catalogNavigationActions.popRoute()
             }
-            pendingDeleteShowGroupKey = nil
         }
-        .task(id: "\(library.id)|genres") {
-            await loadGenreFiltersIfNeeded()
+        pendingDeleteShowGroupKey = nil
+    }
+
+    private func applyFocusTracking<Content: View>(to content: Content) -> some View {
+        content
+            .onAppear {
+                focusCoordinator.clearHomeItems()
+                syncCatalogFocusState()
+            }
+            .onDisappear {
+                focusCoordinator.unregisterCatalogActivateHandler(id: catalogFocusRegistrationID)
+            }
+            .onChange(of: focusCoordinator.catalogActivateRequestID) { _, _ in
+                guard focusCoordinator.catalogActivateHandlerOwnerID == catalogFocusRegistrationID else { return }
+                openFocusedCatalogItem()
+            }
+            .onChange(of: displayedNodes.count) { _, _ in syncCatalogFocusState() }
+            .onChange(of: sortOrder) { _, _ in syncCatalogFocusState() }
+            .onChange(of: watchFilter) { _, _ in syncCatalogFocusState() }
+            .onChange(of: searchText) { _, _ in syncCatalogFocusState() }
+            .onChange(of: catalogGridColumnCount) { _, _ in syncCatalogFocusState() }
+            .onChange(of: viewMode) { _, _ in syncCatalogFocusState() }
+    }
+
+    private func syncCatalogFocusState() {
+        let nodes = displayedNodes
+        focusCoordinator.setCatalogItemCount(nodes.count)
+        let isGrid = viewMode == .grid
+        focusCoordinator.setCatalogLayout(
+            isGrid: isGrid,
+            columnCount: isGrid ? max(catalogGridColumnCount, 2) : 1
+        )
+        focusCoordinator.registerCatalogActivateHandler(id: catalogFocusRegistrationID)
+    }
+
+    private func openFocusedCatalogItem() {
+        let nodes = displayedNodes
+        let index = focusCoordinator.catalogFocusedIndex
+        guard nodes.indices.contains(index) else { return }
+        catalogNavigationActions.pushRoute(catalogRoute(for: nodes[index]))
+    }
+
+    /// Offline TV: group key when this screen lists episodes for one show.
+    private var downloadsShowGroupKey: String? {
+        guard plexServer.isDownloadsServer else { return nil }
+        if case .show(let showKey) = parent {
+            return OfflineDownloadCatalog.showGroupKey(fromCatalogRatingKey: showKey)
         }
-        .onChange(of: sortOrder) { _, newValue in
-            UserDefaults.standard.set(newValue.rawValue, forKey: sortStorageKey)
+        return nil
+    }
+
+    private var isBrowsingDownloadedShowEpisodes: Bool {
+        downloadsShowGroupKey != nil
+    }
+
+    private var deleteShowConfirmTitle: String {
+        "Delete show?"
+    }
+
+    private var deleteShowConfirmMessage: String {
+        let name = navigationTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty {
+            return "Removes all downloaded episodes for this show from this device."
         }
-        .onChange(of: watchFilter) { _, newValue in
-            UserDefaults.standard.set(newValue.rawValue, forKey: watchFilterStorageKey)
-        }
-        .onChange(of: listFilters) { _, newValue in
-            saveListFilters(newValue)
-        }
+        return "Removes all downloaded episodes for “\(name)” from this device."
+    }
+
+    private func requestDeleteShow(groupKey: String) {
+        pendingDeleteShowGroupKey = groupKey
+        showDeleteShowConfirm = true
     }
 
     @ToolbarContentBuilder
     private var catalogExpandedToolbarItems: some ToolbarContent {
+        if let groupKey = downloadsShowGroupKey {
+            ToolbarItem(placement: .destructiveAction) {
+                Button("Delete show", role: .destructive) {
+                    requestDeleteShow(groupKey: groupKey)
+                }
+            }
+        }
         ToolbarItem(placement: .automatic) {
             Picker("View", selection: $viewMode) {
                 ForEach(CatalogViewMode.allCases) { mode in
@@ -301,6 +429,12 @@ struct CatalogListView: View {
 
     private var catalogOptionsMenu: some View {
         Menu {
+            if let groupKey = downloadsShowGroupKey {
+                Button("Delete show", role: .destructive) {
+                    requestDeleteShow(groupKey: groupKey)
+                }
+                Divider()
+            }
             Picker("View", selection: $viewMode) {
                 ForEach(CatalogViewMode.allCases) { mode in
                     Label(mode.label, systemImage: mode.icon).tag(mode)
@@ -563,38 +697,50 @@ struct CatalogListView: View {
         Group {
             switch viewMode {
             case .list:
-                List {
-                    ForEach(displayedNodes) { node in
-                        row(for: node, itemLibrary: library, showLibraryInRow: false)
-                            .onAppear {
-                                loadMoreIfNeeded(appeared: node)
-                            }
-                    }
-                    if catalogHasMore {
-                        HStack {
-                            Spacer()
-                            if isLoadingMore {
-                                ProgressView()
-                            } else {
-                                Text("Load more…")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-                        .onAppear {
-                            Task { await loadMoreCatalog() }
-                        }
+                catalogListModeView
+            case .grid:
+                catalogGridModeView
+            }
+        }
+#if os(tvOS)
+        .tvBrowseFocusSection(.catalog)
+#endif
+    }
+
+    private var catalogListModeView: some View {
+        ScrollViewReader { proxy in
+            List {
+                ForEach(Array(displayedNodes.enumerated()), id: \.element.id) { index, node in
+                    row(
+                        for: node,
+                        itemLibrary: library,
+                        showLibraryInRow: false,
+                        catalogFocusIndex: index
+                    )
+                    .id(node.id)
+                    .onAppear {
+                        loadMoreIfNeeded(appeared: node)
                     }
                 }
-            case .grid:
+                if catalogHasMore {
+                    catalogLoadMoreRow
+                }
+            }
+            .onChange(of: focusCoordinator.catalogFocusedIndex) { _, index in
+                scrollCatalogFocus(to: index, proxy: proxy)
+            }
+        }
+    }
+
+    private var catalogGridModeView: some View {
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 16)],
-                        spacing: 20
-                    ) {
-                        ForEach(displayedNodes) { node in
-                            gridCell(for: node)
+                    LazyVGrid(columns: gridColumns, spacing: 20) {
+                        ForEach(Array(displayedNodes.enumerated()), id: \.element.id) { index, node in
+                            gridCell(for: node, catalogFocusIndex: index)
+                                .padding(6)
+                                .id(node.id)
                                 .onAppear {
                                     loadMoreIfNeeded(appeared: node)
                                 }
@@ -609,14 +755,69 @@ struct CatalogListView: View {
                     }
                     .padding()
                 }
+                .onAppear {
+                    updateGridColumnCount(width: geometry.size.width)
+                }
+                .onChange(of: geometry.size.width) { _, width in
+                    updateGridColumnCount(width: width)
+                }
+                .onChange(of: focusCoordinator.catalogFocusedIndex) { _, index in
+                    scrollCatalogFocus(to: index, proxy: proxy)
+                }
             }
         }
     }
 
+    private var catalogLoadMoreRow: some View {
+        HStack {
+            Spacer()
+            if isLoadingMore {
+                ProgressView()
+            } else {
+                Text("Load more…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .onAppear {
+            Task { await loadMoreCatalog() }
+        }
+    }
+
+    private func scrollCatalogFocus(to index: Int, proxy: ScrollViewProxy) {
+        guard focusCoordinator.route == .catalogList,
+              displayedNodes.indices.contains(index)
+        else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            proxy.scrollTo(displayedNodes[index].id, anchor: .center)
+        }
+    }
+
+    private func updateGridColumnCount(width: CGFloat) {
+        catalogGridColumnCount = gridColumnCount(forWidth: width)
+    }
+
+    private var gridColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 16)]
+    }
+
+    static func gridColumnCount(forWidth width: CGFloat) -> Int {
+        let cellWidth: CGFloat = 140
+        let spacing: CGFloat = 16
+        let padding: CGFloat = 32
+        return max(1, Int((width - padding + spacing) / (cellWidth + spacing)))
+    }
+
+    private func gridColumnCount(forWidth width: CGFloat) -> Int {
+        Self.gridColumnCount(forWidth: width)
+    }
+
     @ViewBuilder
-    private func gridCell(for node: PlexCatalogNode) -> some View {
+    private func gridCell(for node: PlexCatalogNode, catalogFocusIndex: Int) -> some View {
+        let isFocused = focusCoordinator.catalogFocusActive(forIndex: catalogFocusIndex)
         NavigationLink(value: catalogRoute(for: node)) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 CatalogArtworkImage(
                     plexServer: plexServer,
                     thumbPath: node.listThumbPath,
@@ -628,10 +829,19 @@ struct CatalogListView: View {
                 Text(node.listTitle)
                     .font(.caption.weight(.medium))
                     .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(.primary)
             }
+            .browseFocusHighlight(active: isFocused, chrome: .catalogPoster)
         }
         .buttonStyle(.plain)
+#if os(tvOS)
+        .tvCatalogTileFocus()
+#endif
+        .accessibilityLabel(node.listTitle)
+        .accessibilityHint("Open item")
+        .accessibilityIdentifier("catalogItem.\(catalogFocusIndex)")
     }
 
     private func isDownloaded(_ node: PlexCatalogNode) -> Bool {
@@ -679,7 +889,9 @@ struct CatalogListView: View {
                 parent: .season(ratingKey: season.ratingKey),
                 navigationTitle: "\(season.showTitle) · \(season.title)"
             )
-        case .movie, .episode, .musicTrack:
+        case .movie, .episode, .musicTrack, .photo:
+            return .media(library: library, node: node)
+        case .photo:
             return .media(library: library, node: node)
         }
     }
@@ -702,9 +914,11 @@ struct CatalogListView: View {
     private func row(
         for node: PlexCatalogNode,
         itemLibrary: PlexLibrary,
-        showLibraryInRow: Bool
+        showLibraryInRow: Bool,
+        catalogFocusIndex: Int? = nil
     ) -> some View {
         let badge = showLibraryInRow ? itemLibrary.title : originServerLabel(for: node)
+        let focusRing = catalogFocusIndex.map { focusCoordinator.catalogFocusActive(forIndex: $0) } ?? false
         switch node {
         case .show(let show):
             NavigationLink(value: catalogRoute(for: node)) {
@@ -716,12 +930,14 @@ struct CatalogListView: View {
                     showsDownloadedBadge: isDownloaded(node)
                 )
             }
+            .browseFocusHighlight(active: focusRing, chrome: .catalogListRow)
+            .accessibilityLabel(node.listTitle)
+            .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
             .contextMenu {
                 if plexServer.isDownloadsServer,
                    let groupKey = OfflineDownloadCatalog.showGroupKey(fromCatalogRatingKey: show.ratingKey) {
                     Button("Delete show", role: .destructive) {
-                        pendingDeleteShowGroupKey = groupKey
-                        showDeleteShowConfirm = true
+                        requestDeleteShow(groupKey: groupKey)
                     }
                 }
             }
@@ -741,6 +957,24 @@ struct CatalogListView: View {
                     showsDownloadedBadge: false
                 )
             }
+            .browseFocusHighlight(active: focusRing, chrome: .catalogListRow)
+            .accessibilityLabel(node.listTitle)
+            .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
+        case .photo(let photo):
+            Button {
+                photoSlideshowStartIndex = displayedNodes.firstIndex(where: { $0.id == node.id })
+                showPhotoSlideshow = true
+            } label: {
+                CatalogRowView(
+                    plexServer: plexServer,
+                    node: node,
+                    artworkServer: artworkServer(for: node),
+                    libraryContextTitle: badge,
+                    showsDownloadedBadge: false
+                )
+            }
+            .browseFocusHighlight(active: focusRing, chrome: .catalogListRow)
+            .accessibilityLabel(photo.title)
         case .movie, .episode, .musicTrack:
             NavigationLink(value: CatalogNavigationRoute.media(library: itemLibrary, node: node)) {
                 CatalogRowView(
@@ -751,7 +985,15 @@ struct CatalogListView: View {
                     showsDownloadedBadge: isDownloaded(node)
                 )
             }
+            .browseFocusHighlight(active: focusRing, chrome: .catalogListRow)
+            .accessibilityLabel(node.listTitle)
+            .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
         }
+    }
+
+    private func catalogFocusAccessibilityID(for index: Int?) -> String {
+        guard let index else { return "" }
+        return "catalogItem.\(index)"
     }
 }
 
