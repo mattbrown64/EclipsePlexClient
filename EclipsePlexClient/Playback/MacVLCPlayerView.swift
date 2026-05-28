@@ -79,12 +79,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
             self.onNaturalEnd = onNaturalEnd
         }
 
-        nonisolated deinit {
-            guard Thread.isMainThread else { return }
-            MainActor.assumeIsolated {
-                teardown(savePosition: true)
-            }
-        }
+        // `dismantleNSView` calls `teardown(savePosition:)`; avoid duplicate work in deinit.
 
         func attach(to view: VLCVideoView) {
             if videoView !== view {

@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
-# Prints an xcodebuild -destination value for the newest available iPhone simulator.
+# Prints an xcodebuild -destination for an iPhone simulator compatible with the scheme.
 set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-preferred=("iPhone 16 Pro" "iPhone 16" "iPhone 15 Pro" "iPhone 15" "iPhone SE (3rd generation)")
+line=$(
+  xcodebuild -showdestinations \
+    -workspace "$ROOT/EclipsePlexClient.xcworkspace" \
+    -scheme EclipsePlexClient \
+    2>/dev/null \
+    | grep "platform:iOS Simulator" \
+    | grep "name:iPhone" \
+    | head -1 \
+    || true
+)
 
-for name in "${preferred[@]}"; do
-  id=$(xcrun simctl list devices available | grep -F "${name} (" | head -1 | sed -E 's/.*\(([0-9A-F-]+)\).*/\1/' || true)
-  if [[ -n "${id}" ]]; then
-    echo "platform=iOS Simulator,id=${id}"
-    exit 0
-  fi
-done
-
-id=$(xcrun simctl list devices available | grep "iPhone" | head -1 | sed -E 's/.*\(([0-9A-F-]+)\).*/\1/')
-if [[ -z "${id}" ]]; then
-  echo "error: no available iPhone simulator" >&2
+if [[ -z "$line" ]]; then
+  echo "error: no compatible iPhone simulator for EclipsePlexClient" >&2
+  xcodebuild -showdestinations \
+    -workspace "$ROOT/EclipsePlexClient.xcworkspace" \
+    -scheme EclipsePlexClient \
+    2>/dev/null \
+    | grep "iOS Simulator" \
+    | head -20 >&2 || true
   exit 1
 fi
+
+id=$(echo "$line" | sed -E 's/.* id:([^,} ]+).*/\1/')
 echo "platform=iOS Simulator,id=${id}"
