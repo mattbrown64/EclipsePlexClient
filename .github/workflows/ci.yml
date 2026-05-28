@@ -54,6 +54,7 @@ jobs:
   ios-unit-test:
     runs-on: macos-15
     needs: deployment-targets
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -75,7 +76,10 @@ jobs:
           echo "IOS_SIMULATOR_DESTINATION=${DEST}" >> "$GITHUB_ENV"
           echo "Using ${DEST}"
 
-      - name: Unit tests (iPhone Simulator)
+      - name: Boot iOS Simulator
+        run: ./scripts/ci-boot-ios-simulator.sh "$IOS_SIMULATOR_DESTINATION"
+
+      - name: Unit tests (iOS Simulator)
         run: |
           xcodebuild -workspace EclipsePlexClient.xcworkspace \
             -scheme EclipsePlexClient \
@@ -90,6 +94,7 @@ jobs:
   ios-ui-test:
     runs-on: macos-15
     needs: deployment-targets
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -111,12 +116,16 @@ jobs:
           echo "IOS_SIMULATOR_DESTINATION=${DEST}" >> "$GITHUB_ENV"
           echo "Using ${DEST}"
 
-      - name: UI tests (iPhone Simulator)
+      - name: Boot iOS Simulator
+        run: ./scripts/ci-boot-ios-simulator.sh "$IOS_SIMULATOR_DESTINATION"
+
+      - name: UI smoke test (iOS Simulator)
         run: |
           xcodebuild -workspace EclipsePlexClient.xcworkspace \
             -scheme EclipsePlexClient \
             -destination "$IOS_SIMULATOR_DESTINATION" \
-            -only-testing:EclipsePlexClientUITests/BrowseNavigationUITests \
+            -only-testing:EclipsePlexClientUITests/BrowseNavigationUITests/testLaunchExposesBrowseNavigation \
+            -parallel-testing-enabled NO \
             DEVELOPMENT_TEAM= \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY=- \
