@@ -17,9 +17,8 @@ SIGN_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY}"
 if [ -z "${SIGN_IDENTITY}" ]; then
   SIGN_IDENTITY="${CODE_SIGN_IDENTITY}"
 fi
-if [ -z "${SIGN_IDENTITY}" ] || [ "${SIGN_IDENTITY}" = "-" ]; then
-  echo "error: Set a Development signing team for macOS so VLCKit can be re-signed." >&2
-  exit 1
+if [ -z "${SIGN_IDENTITY}" ]; then
+  SIGN_IDENTITY="-"
 fi
 
 find "${FRAMEWORK_DEST}" -type f \( -name '*.dylib' -o -name 'VLCKit' \) | while read -r bin; do

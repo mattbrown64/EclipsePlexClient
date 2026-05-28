@@ -70,7 +70,10 @@ jobs:
         run: ./scripts/fetch-vlckit-macos.sh
 
       - name: Resolve iOS Simulator
-        run: echo "IOS_SIMULATOR_DESTINATION=$(./scripts/ci-ios-simulator-destination.sh)" >> "$GITHUB_ENV"
+        run: |
+          DEST=$(./scripts/ci-ios-simulator-destination.sh)
+          echo "IOS_SIMULATOR_DESTINATION=${DEST}" >> "$GITHUB_ENV"
+          echo "Using ${DEST}"
 
       - name: Unit tests (iPhone Simulator)
         run: |
@@ -103,7 +106,10 @@ jobs:
         run: ./scripts/fetch-vlckit-macos.sh
 
       - name: Resolve iOS Simulator
-        run: echo "IOS_SIMULATOR_DESTINATION=$(./scripts/ci-ios-simulator-destination.sh)" >> "$GITHUB_ENV"
+        run: |
+          DEST=$(./scripts/ci-ios-simulator-destination.sh)
+          echo "IOS_SIMULATOR_DESTINATION=${DEST}" >> "$GITHUB_ENV"
+          echo "Using ${DEST}"
 
       - name: UI tests (iPhone Simulator)
         run: |
