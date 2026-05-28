@@ -7,6 +7,7 @@ import Foundation
 
 /// Resolves `PlaybackRequest` into `ResolvedPlayback` for the player shell.
 enum ContentViewPlaybackLoader {
+    @MainActor
     static func resolveOfflineFileURL(
         for request: PlaybackRequest,
         downloadManager: OfflineDownloadManager

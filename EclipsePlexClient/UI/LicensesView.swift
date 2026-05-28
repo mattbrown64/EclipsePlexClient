@@ -11,9 +11,13 @@ struct LicensesView: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Open source")
                     .font(.title2.bold())
-                Text(licensesBody)
-                    .font(.footnote)
-                    .textSelection(.enabled)
+                Group {
+                    Text(licensesBody)
+                        .font(.footnote)
+#if !os(tvOS)
+                        .textSelection(.enabled)
+#endif
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()

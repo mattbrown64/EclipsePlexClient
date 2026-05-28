@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  # GitHub-hosted runners have no personal signing certs; use ad-hoc signing.
+  DEVELOPMENT_TEAM: ""
+  CODE_SIGN_STYLE: Manual
+  CODE_SIGN_IDENTITY: "-"
+  CODE_SIGNING_REQUIRED: NO
+
 jobs:
   deployment-targets:
     runs-on: macos-15

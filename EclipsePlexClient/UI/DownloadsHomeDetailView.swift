@@ -111,7 +111,7 @@ struct DownloadsHomeDetailView: View {
                                 showDeleteShowConfirm = true
                             }
                             .buttonStyle(.pressableBordered)
-                            .controlSize(.small)
+                            .platformControlSize(.small)
                         }
                     }
                 }

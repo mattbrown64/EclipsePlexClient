@@ -371,7 +371,7 @@ struct ServerManagementView: View {
                 .disabled(stoppingSessionId == session.terminateSessionId)
                 if stoppingSessionId == session.terminateSessionId {
                     ProgressView()
-                        .controlSize(.small)
+                        .platformControlSize(.small)
                 }
             }
         }
@@ -403,7 +403,7 @@ struct ServerManagementView: View {
             .disabled(workingLibraryID == library.id)
             if workingLibraryID == library.id {
                 ProgressView()
-                    .controlSize(.small)
+                    .platformControlSize(.small)
             }
         }
         .padding(.vertical, 4)

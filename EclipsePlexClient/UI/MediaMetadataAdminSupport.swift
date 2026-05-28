@@ -16,6 +16,7 @@ struct MediaMetadataAdminState {
     var statusMessage: String?
 }
 
+@MainActor
 enum MediaMetadataAdminAccess {
     static func isEligible(plexServer: PlexServer, node: PlexCatalogNode? = nil) -> Bool {
         guard plexServer.usesLivePlexAPI, !plexServer.isDownloadsServer else { return false }
@@ -540,7 +541,7 @@ struct MediaMetadataAdminSection: View {
                 if !canManage {
                     HStack(spacing: 8) {
                         ProgressView()
-                            .controlSize(.small)
+                            .platformControlSize(.small)
                         Text("Checking server permissions…")
                             .font(.caption)
                             .foregroundStyle(.secondary)

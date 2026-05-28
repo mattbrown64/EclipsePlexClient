@@ -412,7 +412,7 @@ struct AppSidebarView: View {
                 Spacer(minLength: 0)
                 if isPending {
                     ProgressView()
-                        .controlSize(.small)
+                        .platformControlSize(.small)
                         .accessibilityLabel("Loading")
                 } else if isSelected {
                     Image(systemName: "checkmark")

@@ -56,7 +56,11 @@ struct MiniPlayerBar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
+#if os(tvOS)
+        .background(.regularMaterial)
+#else
         .background(.bar)
+#endif
         .accessibilityIdentifier("miniPlayerBar")
     }
 

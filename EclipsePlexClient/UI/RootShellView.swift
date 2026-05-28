@@ -521,7 +521,7 @@ struct RootShellView: View {
     private func libraryLoadingDetail(title: String) -> some View {
         VStack(spacing: 14) {
             ProgressView()
-                .controlSize(.large)
+                .platformControlSize(.large)
             Text("Loading \(title)…")
                 .font(.headline)
             Text("Preparing library content")

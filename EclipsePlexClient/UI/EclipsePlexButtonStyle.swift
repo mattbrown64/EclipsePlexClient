@@ -110,3 +110,15 @@ extension ButtonStyle where Self == BrowsePressableButtonStyle {
         BrowsePressableButtonStyle(isFocused: focused, chrome: chrome)
     }
 }
+
+extension View {
+    /// `controlSize` is unavailable on tvOS; no-op there.
+    @ViewBuilder
+    func platformControlSize(_ size: ControlSize) -> some View {
+#if os(tvOS)
+        self
+#else
+        controlSize(size)
+#endif
+    }
+}

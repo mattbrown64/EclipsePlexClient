@@ -164,10 +164,24 @@ struct SettingsView: View {
                 Button("Clear artwork cache") {
                     showClearArtworkConfirm = true
                 }
+#if os(tvOS)
+                NavigationLink {
+                    ScrollView {
+                        Text(AppDiagnostics.exportText(registry: registry, downloadManager: downloadManager))
+                            .font(.footnote)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                    }
+                    .navigationTitle("Diagnostics")
+                } label: {
+                    Label("View diagnostics", systemImage: "doc.text.magnifyingglass")
+                }
+#else
                 ShareLink(item: AppDiagnostics.exportText(registry: registry, downloadManager: downloadManager)) {
                     Label("Export diagnostics", systemImage: "square.and.arrow.up")
                 }
                 .accessibilityLabel("Export diagnostics")
+#endif
             }
 
             Section("Legal & support") {

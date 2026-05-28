@@ -125,78 +125,86 @@ struct FixMatchPickerSheet: View {
 
     private var searchOptionsSection: some View {
         Section {
+#if os(tvOS)
+            searchOptionsFields
+#else
             DisclosureGroup("Search options", isExpanded: $showSearchOptions) {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Title")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("Title or ID (imdb-tt…, tmdb-…, tvdb-…)", text: $searchTitle)
-#if os(iOS)
-                            .textInputAutocapitalization(.words)
-                            .autocorrectionDisabled()
-#endif
-                    }
-
-                    Toggle("Limit to year", isOn: $limitToYear)
-                    if limitToYear {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Year")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            TextField("Year", text: $searchYearText)
-#if os(iOS)
-                                .keyboardType(.numberPad)
-#endif
-                        }
-                    }
-
-                    if showsTVFields {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("TV show")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            TextField("Series title", text: $searchShowTitle)
-#if os(iOS)
-                                .textInputAutocapitalization(.words)
-#endif
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Season")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            TextField("e.g. Season 1", text: $searchSeasonTitle)
-#if os(iOS)
-                                .textInputAutocapitalization(.words)
-#endif
-                        }
-                    }
-
-                    Text(externalIDHelp)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Button {
-                        Task { await runSearch() }
-                    } label: {
-                        Label("Search Plex", systemImage: "magnifyingglass")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.pressableBorderedProminent)
-                    .disabled(isLoading || currentHints.trimmedTitle == nil)
-
-                    Button("Reset to file info") {
-                        resetSearchFields()
-                    }
-                    .buttonStyle(.pressableBordered)
-                    .font(.caption)
-                }
-                .padding(.vertical, 4)
+                searchOptionsFields
             }
+#endif
         } footer: {
             Text("Change title, year, or use an external ID when automatic matches are wrong.")
         }
+    }
+
+    private var searchOptionsFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Title")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Title or ID (imdb-tt…, tmdb-…, tvdb-…)", text: $searchTitle)
+#if os(iOS)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+#endif
+            }
+
+            Toggle("Limit to year", isOn: $limitToYear)
+            if limitToYear {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Year")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("Year", text: $searchYearText)
+#if os(iOS)
+                        .keyboardType(.numberPad)
+#endif
+                }
+            }
+
+            if showsTVFields {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("TV show")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("Series title", text: $searchShowTitle)
+#if os(iOS)
+                        .textInputAutocapitalization(.words)
+#endif
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Season")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. Season 1", text: $searchSeasonTitle)
+#if os(iOS)
+                        .textInputAutocapitalization(.words)
+#endif
+                }
+            }
+
+            Text(externalIDHelp)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                Task { await runSearch() }
+            } label: {
+                Label("Search Plex", systemImage: "magnifyingglass")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.pressableBorderedProminent)
+            .disabled(isLoading || currentHints.trimmedTitle == nil)
+
+            Button("Reset to file info") {
+                resetSearchFields()
+            }
+            .buttonStyle(.pressableBordered)
+            .font(.caption)
+        }
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
