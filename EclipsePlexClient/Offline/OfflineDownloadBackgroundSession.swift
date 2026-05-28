@@ -38,5 +38,15 @@ final class OfflineDownloadAppDelegate: NSObject, UIApplicationDelegate {
         }
         OfflineDownloadBackgroundSession.backgroundCompletionHandler = completionHandler
     }
+
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        if PlaybackOrientationLock.isLockedToLandscape {
+            return PlaybackOrientationLock.supportedMask
+        }
+        return .all
+    }
 }
 #endif

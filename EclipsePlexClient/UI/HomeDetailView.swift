@@ -41,24 +41,6 @@ struct HomeDetailView: View {
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif
-        .browseMenuToolbar()
-        .toolbar {
-            if plexServer?.usesLivePlexAPI == true {
-                ToolbarItem(placement: .automatic) {
-                    Button {
-                        openServerSearch?.open()
-                    } label: {
-                        Label("Search", systemImage: "magnifyingglass")
-                    }
-                    .accessibilityIdentifier("serverSearchButton")
-                }
-                ToolbarItem(placement: .automatic) {
-                    Button(action: onManageServer) {
-                        Label("Server management", systemImage: "server.rack")
-                    }
-                }
-            }
-        }
         .refreshable {
             await loadHubs()
         }

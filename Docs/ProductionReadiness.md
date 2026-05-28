@@ -15,7 +15,7 @@ Living checklist for EclipsePlex release gates.
 
 - [x] Secrets in Keychain; legacy UserDefaults keys removed after migration
 - [x] Version/build from Bundle; Plex headers use same source
-- [x] iOS 16 / tvOS 17 / macOS 14 targets aligned in project, Podfile, CI
+- [x] iOS 26 / tvOS 17 / macOS 14 targets aligned in project, Podfile, CI
 - [x] `PrivacyInfo.xcprivacy` present and accurate
 - [x] In-app Licenses + privacy/support links in Settings
 - [x] Crash reporter active (local buffer + optional `SentryDSN` in Info.plist)

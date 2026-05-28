@@ -37,6 +37,8 @@ public class UIVLCVideoPlayerView: _PlatformView {
     private var lastAspectFill: Float = 0
     private var lastPlayerTicks: Int32 = 0
     private var lastPlayerState: VLCMediaPlayerState = .opening
+    /// True once time advancement shows frames are playing despite VLC reporting buffering.
+    private var playbackInferredFromTicks = false
 
     private var aspectFillScale: CGFloat {
         guard let currentMediaPlayer else { return 1 }
@@ -125,6 +127,7 @@ public class UIVLCVideoPlayerView: _PlatformView {
         proxy?.mediaPlayer = newMediaPlayer
         lastPlayerTicks = 0
         lastPlayerState = .opening
+        playbackInferredFromTicks = false
 
         if newConfiguration.autoPlay {
             // Defer until the representable has a non-zero frame (see `startPlaybackIfNeeded`).
@@ -296,14 +299,11 @@ extension UIVLCVideoPlayerView: VLCMediaPlayerDelegate {
             onTicksUpdated(currentTicks.asInt, playbackInformation)
         }
 
-        // Set playing state
-        if lastPlayerState != .playing,
-           abs(currentTicks - lastPlayerTicks) >= 200
-        {
-            onStateUpdated(.playing, playbackInformation)
-            lastPlayerState = .playing
-            lastPlayerTicks = currentTicks
-        }
+        promotePlayingStateIfTimeIsAdvancing(
+            player: player,
+            currentTicks: currentTicks,
+            playbackInformation: playbackInformation
+        )
 
         // Replay
         if configuration.replay,
@@ -322,10 +322,42 @@ extension UIVLCVideoPlayerView: VLCMediaPlayerDelegate {
         guard let media = player.media else { return }
 
         let wrappedState = VLCVideoPlayer.State(rawValue: player.state.rawValue) ?? .error
+
+        // VLC often stays in buffering/opening while playback is already underway.
+        if playbackInferredFromTicks,
+           lastPlayerState == .playing,
+           wrappedState == .buffering || wrappedState == .opening {
+            return
+        }
+
         let playbackInformation = constructPlaybackInformation(player: player, media: media)
 
         onStateUpdated(wrappedState, playbackInformation)
         lastPlayerState = player.state
+        if wrappedState == .playing {
+            playbackInferredFromTicks = false
+        }
+    }
+
+    private func promotePlayingStateIfTimeIsAdvancing(
+        player: VLCMediaPlayer,
+        currentTicks: Int32,
+        playbackInformation: VLCVideoPlayer.PlaybackInformation
+    ) {
+        guard lastPlayerState != .playing else { return }
+
+        let tickDelta = abs(currentTicks - lastPlayerTicks)
+        let vlcReportsLoading = player.state == .buffering
+            || player.state == .opening
+            || lastPlayerState == .buffering
+            || lastPlayerState == .opening
+        let threshold: Int32 = vlcReportsLoading ? 150 : 200
+        guard tickDelta >= threshold else { return }
+
+        onStateUpdated(.playing, playbackInformation)
+        lastPlayerState = .playing
+        playbackInferredFromTicks = vlcReportsLoading
+        lastPlayerTicks = currentTicks
     }
 
     private func setConfigurationValues(with player: VLCMediaPlayer, from configuration: VLCVideoPlayer.Configuration) {

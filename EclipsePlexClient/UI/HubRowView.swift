@@ -58,7 +58,7 @@ struct HubRowView: View {
 #if os(tvOS)
                                 .tvCatalogTileFocus()
 #endif
-                                .accessibilityLabel(hit.node.listTitle)
+                                .accessibilityLabel(hit.node.galleryAccessibilityLabel)
                                 .id(focusID)
                             }
                         }

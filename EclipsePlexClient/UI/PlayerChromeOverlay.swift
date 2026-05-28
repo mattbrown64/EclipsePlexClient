@@ -5,12 +5,37 @@
 
 import SwiftUI
 
-/// Top/bottom playback chrome with gradient scrims (auto-hide with `PlayerChromeController`).
+#if os(iOS)
+import UIKit
+#endif
+
+/// Circular icon-only control for playback chrome (accessibility label only, no visible text).
+struct PlaybackChromeIconButton: View {
+    let systemImage: String
+    let accessibilityLabel: String
+    var isEnabled: Bool = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.body.weight(.semibold))
+                .frame(width: 36, height: 36)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+/// Top/bottom playback chrome (auto-hide with `PlayerChromeController`).
 struct PlayerChromeOverlay<TopTrailing: View, Bottom: View>: View {
     let title: String?
     var skipMarkerTitle: String?
     var onSkipMarker: () -> Void = {}
     let onExit: () -> Void
+    var onMinimize: (() -> Void)?
     let onInteraction: () -> Void
     /// Tap on the empty area between top and bottom chrome (e.g. hide controls).
     var onBackgroundTap: () -> Void = {}
@@ -18,88 +43,90 @@ struct PlayerChromeOverlay<TopTrailing: View, Bottom: View>: View {
     @ViewBuilder let bottom: () -> Bottom
 
     var body: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                topChrome
-                Spacer()
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onBackgroundTap)
-                bottomChrome
+        GeometryReader { geometry in
+            let insets = playbackChromeInsets(in: geometry)
+            ZStack {
+                VStack(spacing: 0) {
+                    topChrome(insets: insets)
+                    Spacer()
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: onBackgroundTap)
+                    bottomChrome(insets: insets)
+                }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity)
     }
 
-    private var topChrome: some View {
-        ZStack(alignment: .top) {
-            PlayerChromeScrim(edge: .top)
-            HStack(alignment: .top, spacing: 12) {
-                Button(action: {
-                    onInteraction()
-                    onExit()
-                }) {
-                    Label("Exit", systemImage: "chevron.backward")
-                        .padding(8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-                .buttonStyle(.plain)
-
-                VStack(spacing: 8) {
-                    if let title, !title.isEmpty {
-                        Text(title)
-                            .font(.headline)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.center)
-                    }
-
-                    if let skipMarkerTitle {
-                        Button(skipMarkerTitle, action: {
-                            onInteraction()
-                            onSkipMarker()
-                        })
-                        .buttonStyle(.pressableBorderedProminent)
-                        .controlSize(.regular)
-                        .accessibilityIdentifier("skipMarkerButton")
-                    }
-                }
-                .frame(maxWidth: .infinity)
-
-                topTrailing()
-                    .frame(minWidth: 44, alignment: .trailing)
-            }
-            .padding()
-            .padding(.top, 4)
-        }
-        .safeAreaPadding(.top)
-    }
-
-    private var bottomChrome: some View {
-        ZStack(alignment: .bottom) {
-            PlayerChromeScrim(edge: .bottom)
-            bottom()
-        }
+    private func playbackChromeInsets(in geometry: GeometryProxy) -> EdgeInsets {
 #if os(iOS)
-        .safeAreaPadding(.bottom, 8)
+        PlaybackViewportInsets.chromeInsets(in: geometry)
+#else
+        geometry.safeAreaInsets
 #endif
     }
-}
 
-private struct PlayerChromeScrim: View {
-    enum Edge {
-        case top
-        case bottom
+    private func topChrome(insets: EdgeInsets) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            HStack(spacing: 8) {
+                if let onMinimize {
+                    PlaybackChromeIconButton(
+                        systemImage: "chevron.down",
+                        accessibilityLabel: "Minimize",
+                        action: {
+                            onInteraction()
+                            onMinimize()
+                        }
+                    )
+                    .accessibilityIdentifier("minimizePlayback")
+                }
+
+                PlaybackChromeIconButton(
+                    systemImage: "xmark",
+                    accessibilityLabel: "Stop",
+                    action: {
+                        onInteraction()
+                        onExit()
+                    }
+                )
+                .accessibilityIdentifier("exitPlayback")
+            }
+
+            VStack(spacing: 8) {
+                if let title, !title.isEmpty {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let skipMarkerTitle {
+                    Button(skipMarkerTitle, action: {
+                        onInteraction()
+                        onSkipMarker()
+                    })
+                    .buttonStyle(.pressableBorderedProminent)
+                    .controlSize(.regular)
+                    .accessibilityIdentifier("skipMarkerButton")
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            topTrailing()
+                .frame(minWidth: 44, alignment: .trailing)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .padding(.top, insets.top)
+        .padding(.leading, insets.leading)
+        .padding(.trailing, insets.trailing)
     }
 
-    let edge: Edge
-
-    var body: some View {
-        LinearGradient(
-            colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
-            startPoint: edge == .top ? .top : .bottom,
-            endPoint: edge == .top ? .bottom : .top
-        )
-        .frame(maxWidth: .infinity)
-        .frame(height: 140)
-        .allowsHitTesting(false)
+    private func bottomChrome(insets: EdgeInsets) -> some View {
+        bottom()
+            .padding(.bottom, insets.bottom)
+            .padding(.leading, insets.leading)
+            .padding(.trailing, insets.trailing)
     }
 }

@@ -3,10 +3,12 @@ import SwiftUI
 /// Full-screen video playback driven by `PlaybackRequest` (Plex, local file, or bundled demo).
 struct ContentView: View {
     var request: PlaybackRequest?
+    var isCompactSession = false
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    @EnvironmentObject private var playbackPresenter: PlaybackPresenter
 
     @StateObject private var playerChrome = PlayerChromeController()
     @State private var activeRequest: PlaybackRequest?
@@ -14,8 +16,9 @@ struct ContentView: View {
     @State private var loadError: String?
     @State private var loadingMessage = "Preparing playback…"
 
-    init(request: PlaybackRequest? = nil) {
+    init(request: PlaybackRequest? = nil, isCompactSession: Bool = false) {
         self.request = request
+        self.isCompactSession = isCompactSession
         _activeRequest = State(initialValue: request)
     }
 
@@ -46,11 +49,15 @@ struct ContentView: View {
                     ),
                     windowTitle: $playerChromeShowTitle,
                     chrome: playerChrome,
-                    onDone: { dismiss() },
+                    isCompactSession: isCompactSession,
+                    onStop: { playbackPresenter.stop() },
+                    onMinimize: { playbackPresenter.minimize() },
                     onAdvanceTo: { next in
                         activeRequest = next
                         resolvedPlayback = nil
+                        playbackPresenter.setActivePlayback(nil)
                         playerChromeShowTitle = nil
+                        playbackPresenter.replaceRequest(next)
                     }
                 )
             } else if let loadError {
@@ -64,6 +71,7 @@ struct ContentView: View {
         .background(.black)
         .navigationBarBackButtonHidden(true)
         .onAppear {
+            guard !isCompactSession else { return }
             focusCoordinator.browseKeyboardCommandsEnabled = false
             // Defer so `.task` and focus routing don't fight in the same frame.
             DispatchQueue.main.async {
@@ -71,13 +79,17 @@ struct ContentView: View {
             }
         }
         .onDisappear {
+            guard !isCompactSession else { return }
             focusCoordinator.browseKeyboardCommandsEnabled = true
         }
 #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .persistentSystemOverlays(playerChrome.isVisible ? .automatic : .hidden)
-        .ignoresSafeArea(.container, edges: .vertical)
+        .persistentSystemOverlays(.hidden)
+        .statusBarHidden(true)
+#endif
+#if os(macOS)
+        .toolbar(.hidden)
 #endif
         .task(id: playbackLoadTaskKey) {
             guard playbackLoadTaskKey != "none" else { return }
@@ -102,7 +114,7 @@ struct ContentView: View {
             } description: {
                 Text(message)
             }
-            Button("Exit", action: { dismiss() })
+            Button("Exit", action: { playbackPresenter.stop() })
                 .buttonStyle(.pressableBordered)
         }
     }
@@ -112,6 +124,11 @@ struct ContentView: View {
         loadError = nil
 
         let req = self.activeRequest ?? request ?? .bundledDemo
+
+        if let cached = playbackPresenter.activePlayback, matchesRequest(req, cached) {
+            resolvedPlayback = cached
+            return
+        }
 
         switch req {
         case .plex:
@@ -136,12 +153,25 @@ struct ContentView: View {
             )
             guard !Task.isCancelled else { return }
             resolvedPlayback = resolved
+            playbackPresenter.setActivePlayback(resolved)
         } catch is CancellationError {
             return
         } catch {
             guard !Task.isCancelled else { return }
             AppLog.playback("ContentView playback failed: \(error.localizedDescription)")
             loadError = PlaybackErrorMessages.friendly(error.localizedDescription)
+        }
+    }
+
+    private func matchesRequest(_ request: PlaybackRequest, _ playback: ResolvedPlayback) -> Bool {
+        guard let ctx = playback.resumeContext else { return false }
+        switch request {
+        case .plex(let server, let ratingKey, _, _):
+            return ctx.serverId == server.id && ctx.ratingKey == ratingKey
+        case .downloadedPlexItem(let server, let ratingKey, _):
+            return ctx.serverId == server.id && ctx.ratingKey == ratingKey
+        default:
+            return false
         }
     }
 }
@@ -153,10 +183,16 @@ private struct VideoPlaybackView: View {
     @Binding var playback: ResolvedPlayback
     @Binding var windowTitle: String?
     @ObservedObject var chrome: PlayerChromeController
-    let onDone: () -> Void
+    var isCompactSession = false
+    let onStop: () -> Void
+    var onMinimize: (() -> Void)?
     var onAdvanceTo: (PlaybackRequest) -> Void = { _ in }
 
     @EnvironmentObject private var plexRegistry: PlexServerRegistry
+    @EnvironmentObject private var playbackPresenter: PlaybackPresenter
+    @EnvironmentObject private var downloadManager: OfflineDownloadManager
+    @Environment(\.appThemePalette) private var themePalette
+    @Environment(\.themeAccent) private var themeAccent
     @State private var nextEpisodeCandidate: PlexEpisodeSummary?
     @State private var previousEpisodeCandidate: PlexEpisodeSummary?
     @State private var nextEpisodeContext: EpisodePlayContext?
@@ -172,9 +208,9 @@ private struct VideoPlaybackView: View {
     }
 
     #if os(macOS)
-    @StateObject private var vlcController = MacVLCPlaybackController()
+    private var vlcController: MacVLCPlaybackController { playbackPresenter.macController }
     #else
-    @StateObject private var vlcProxy = VLCVideoPlayer.Proxy()
+    private var vlcProxy: VLCVideoPlayer.Proxy { playbackPresenter.vlcProxy }
     @State private var positionMs = 0
     @State private var durationMs = 0
     @State private var isPlaying = false
@@ -190,6 +226,8 @@ private struct VideoPlaybackView: View {
     @State private var isReloadingStream = false
     @State private var didReportWatchState = false
     @State private var settingsPinReleaseTask: Task<Void, Never>?
+    @State private var lastObservedPositionMs = 0
+    @State private var lastPositionAdvancedAt: Date?
 
     private var canReloadStream: Bool {
         if case .plex = request { return true }
@@ -197,28 +235,117 @@ private struct VideoPlaybackView: View {
     }
 
     private var blocksAutoHide: Bool {
-        isReloadingStream || playerErrorMessage != nil
+        isReloadingStream || playerErrorMessage != nil || shouldShowStatusOverlay
+    }
+
+    private var shouldShowStatusOverlay: Bool {
+        if playbackProgressIsActive { return false }
+        guard !statusText.isEmpty else { return false }
+        let lower = statusText.lowercased()
+        return lower.contains("opening") || lower.contains("buffering") || lower.contains("trying") || lower.contains("resuming")
+    }
+
+    /// Hides stale opening/buffering UI once time is clearly advancing.
+    private var playbackProgressIsActive: Bool {
+        #if os(macOS)
+        if vlcController.isPlaying { return true }
+        let position = vlcController.positionMs
+        let duration = vlcController.durationMs
+        #else
+        if isPlaying { return true }
+        let position = positionMs
+        let duration = durationMs
+        #endif
+        if duration > 0, position >= 500 { return true }
+        if let lastPositionAdvancedAt {
+            return Date().timeIntervalSince(lastPositionAdvancedAt) < 3
+        }
+        return false
+    }
+
+    private func notePlaybackPositionAdvance(_ position: Int) {
+        if position > lastObservedPositionMs + 150 {
+            lastPositionAdvancedAt = Date()
+        }
+        lastObservedPositionMs = max(lastObservedPositionMs, position)
     }
 
     var body: some View {
+        Group {
+            if isCompactSession {
+                playerLayer
+            } else {
+                fullPlaybackChrome
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            Color.black.ignoresSafeArea()
+        }
+        .onAppear {
+            registerNowPlayingIfNeeded()
+            startPeriodicScrobble()
+            guard !isCompactSession else { return }
+            if !playback.playbackMarkers.isEmpty {
+                playbackMarkers = playback.playbackMarkers
+            }
+            chrome.bumpActivity()
+            if blocksAutoHide {
+                chrome.setPinned(true)
+            }
+            #if os(macOS)
+            vlcController.setSourceVideoSize(playback.sourceVideoSize)
+            #endif
+        }
+#if os(macOS)
+        .onChange(of: vlcController.positionTracker.positionMs) { _, position in
+            if !isCompactSession {
+                chrome.bumpActivity()
+            }
+            notePlaybackPositionAdvance(position)
+            publishTransportState(positionMs: position, durationMs: vlcController.durationMs)
+        }
+        .onChange(of: vlcController.isPlaying) { _, playing in
+            publishTransportState(positionMs: vlcController.positionMs, durationMs: vlcController.durationMs, isPlaying: playing)
+        }
+#endif
+        .onDisappear {
+            guard !isCompactSession else { return }
+            chrome.tearDown()
+            PlaybackScrobbleReporter.stopPeriodicReporting()
+            guard !didReportWatchState else { return }
+            didReportWatchState = true
+            let req = request
+            let position = currentPositionMs()
+            let duration = currentDurationMs()
+            Task {
+                await PlaybackScrobbleReporter.reportSessionEnd(
+                    request: req,
+                    positionMs: position,
+                    durationMs: duration
+                )
+            }
+        }
+    }
+
+    private var fullPlaybackChrome: some View {
         ZStack {
+            brandedLoadingUnderlay
             playerLayer
+                .ignoresSafeArea()
             if !chrome.isVisible {
                 tapToToggleLayer
+                    .ignoresSafeArea()
             }
             if chrome.isVisible {
                 chromeOverlay
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .zIndex(1)
             }
             blockingOverlays
             playNextOverlay
                 .zIndex(20)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.black)
-#if os(iOS)
-        .ignoresSafeArea(.container, edges: .vertical)
-#endif
         .onChange(of: isPlayNextOverlayVisible) { _, showing in
             chrome.setPinned(showing)
             if showing {
@@ -244,40 +371,6 @@ private struct VideoPlaybackView: View {
             guard merged != playbackMarkers else { return }
             playbackMarkers = merged
         }
-        .onAppear {
-            if !playback.playbackMarkers.isEmpty {
-                playbackMarkers = playback.playbackMarkers
-            }
-            chrome.bumpActivity()
-            if blocksAutoHide {
-                chrome.setPinned(true)
-            }
-            #if os(macOS)
-            vlcController.setSourceVideoSize(playback.sourceVideoSize)
-            #endif
-            startPeriodicScrobble()
-        }
-#if os(macOS)
-        .onChange(of: vlcController.positionMs) { _, _ in
-            chrome.bumpActivity()
-        }
-#endif
-        .onDisappear {
-            chrome.tearDown()
-            PlaybackScrobbleReporter.stopPeriodicReporting()
-            guard !didReportWatchState else { return }
-            didReportWatchState = true
-            let req = request
-            let position = currentPositionMs()
-            let duration = currentDurationMs()
-            Task {
-                await PlaybackScrobbleReporter.reportSessionEnd(
-                    request: req,
-                    positionMs: position,
-                    durationMs: duration
-                )
-            }
-        }
         .onChange(of: blocksAutoHide) { _, blocks in
             chrome.setPinned(blocks)
             if !blocks {
@@ -294,6 +387,38 @@ private struct VideoPlaybackView: View {
         .background {
             playbackKeyboardCaptureButtons
         }
+    }
+
+    private var brandedLoadingUnderlay: some View {
+        let show = isReloadingStream || shouldShowStatusOverlay
+        let gradientColors = themePalette?.playerGradient ?? [
+            Color(red: 0.09, green: 0.10, blue: 0.18),
+            Color(red: 0.15, green: 0.08, blue: 0.22),
+            Color(red: 0.04, green: 0.06, blue: 0.14)
+        ]
+        let logoTint = themeAccent
+        let (start, end) = themePalette?.playerGradientPoints ?? (.topLeading, .bottomTrailing)
+
+        return ZStack {
+            LinearGradient(
+                colors: gradientColors,
+                startPoint: start,
+                endPoint: end
+            )
+
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 220)
+                .saturation(0)
+                .colorMultiply(logoTint)
+                .opacity(0.20)
+                .blendMode(.screen)
+
+        }
+        .opacity(show ? 1 : 0.35)
+        .animation(.easeInOut(duration: 0.25), value: show)
+        .ignoresSafeArea()
     }
 
     @ViewBuilder
@@ -316,8 +441,10 @@ private struct VideoPlaybackView: View {
                 statusText: $statusText,
                 errorMessage: $playerErrorMessage,
                 onPositionUpdate: { position, duration in
+                    notePlaybackPositionAdvance(position)
                     positionMs = position
                     durationMs = duration
+                    publishTransportState(positionMs: position, durationMs: duration)
                 },
                 onPlaybackInfoUpdate: { info in
                     vlcSubtitleTracks = info.subtitleTracks
@@ -330,6 +457,7 @@ private struct VideoPlaybackView: View {
                 },
                 onPlayerStateChange: { state in
                     isPlaying = state == .playing
+                    publishTransportState(isPlaying: state == .playing)
                 },
                 onNaturalEnd: {
                     Task { await handleNaturalEnd() }
@@ -365,19 +493,22 @@ private struct VideoPlaybackView: View {
             skipMarkerTitle: pendingSkipAction?.title,
             onSkipMarker: performPendingSkip,
             onExit: exitPlayback,
+            onMinimize: onMinimize,
             onInteraction: { chrome.bumpActivity() },
             onBackgroundTap: { chrome.toggle() },
             topTrailing: {
                 #if os(iOS) || os(tvOS)
-                PlaybackSettingsControls(
-                    playback: playback,
-                    canReloadStream: canReloadStream,
-                    onSubtitleSelection: applySubtitleSelection,
-                    onVideoResolution: applyVideoResolution,
-                    onPlaybackSpeed: applyPlaybackSpeed,
-                    onInteraction: { chrome.bumpActivity() },
-                    onSettingsEngage: engageSettingsChrome
-                )
+                HStack(spacing: 8) {
+                    PlaybackSettingsControls(
+                        playback: playback,
+                        canReloadStream: canReloadStream,
+                        onSubtitleSelection: applySubtitleSelection,
+                        onVideoResolution: applyVideoResolution,
+                        onPlaybackSpeed: applyPlaybackSpeed,
+                        onInteraction: { chrome.bumpActivity() },
+                        onSettingsEngage: engageSettingsChrome
+                    )
+                }
                 #else
                 EmptyView()
                 #endif
@@ -493,6 +624,11 @@ private struct VideoPlaybackView: View {
                 .padding()
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         }
+        if !isReloadingStream, shouldShowStatusOverlay {
+            ProgressView(statusText)
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        }
         if let playerErrorMessage {
             VStack(spacing: 12) {
                 Text(playerErrorMessage)
@@ -543,12 +679,48 @@ private struct VideoPlaybackView: View {
         #endif
     }
 
+    private func registerNowPlayingIfNeeded() {
+        PlaybackNowPlayingController.shared.beginSession(
+            title: request?.displayTitle,
+            play: { [playbackPresenter] in playbackPresenter.togglePlayPause() },
+            pause: { [playbackPresenter] in playbackPresenter.togglePlayPause() },
+            toggle: { [playbackPresenter] in playbackPresenter.togglePlayPause() },
+            skipForward: { [playbackPresenter] in playbackPresenter.seekBy(seconds: 15) },
+            skipBackward: { [playbackPresenter] in playbackPresenter.seekBy(seconds: -15) }
+        )
+        publishTransportState()
+    }
+
+    private func publishTransportState(
+        positionMs: Int? = nil,
+        durationMs: Int? = nil,
+        isPlaying: Bool? = nil
+    ) {
+        let position = positionMs ?? currentPositionMs()
+        let duration = durationMs ?? currentDurationMs()
+        #if os(macOS)
+        playbackPresenter.updateTransport(
+            title: playbackTitle ?? request?.displayTitle,
+            positionMs: position,
+            durationMs: duration,
+            isPlaying: isPlaying ?? vlcController.isPlaying
+        )
+        #else
+        playbackPresenter.updateTransport(
+            title: playbackTitle ?? request?.displayTitle,
+            positionMs: position,
+            durationMs: duration,
+            isPlaying: isPlaying ?? self.isPlaying
+        )
+        #endif
+    }
+
     private func exitPlayback() {
         cancelPlayNextCountdown()
         isPlayNextOverlayVisible = false
         Task {
             await reportWatchStateToPlex()
-            onDone()
+            onStop()
         }
     }
 
@@ -1165,7 +1337,7 @@ private struct IOSVLCPlaybackControls: View {
             .labelStyle(.iconOnly)
         }
         .padding(.horizontal)
-        .padding(.bottom, 4)
+        .padding(.top, 8)
         .onChange(of: positionMs) { _, position in
             if !isScrubbing {
                 scrubberMs = Double(position)

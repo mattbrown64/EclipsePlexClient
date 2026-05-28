@@ -20,6 +20,7 @@ build/
 # Editor / local AI
 .vscode/
 .cursor/
+.cursor-ios-build.log
 
 # macOS
 .DS_Store

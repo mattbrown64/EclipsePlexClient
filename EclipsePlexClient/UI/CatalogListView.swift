@@ -1020,7 +1020,7 @@ struct CatalogListView: View {
                     }
                 }
             }
-            .accessibilityLabel(node.listTitle)
+            .accessibilityLabel(node.galleryAccessibilityLabel)
             .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
         case .season(let season):
             CatalogListRowFocusOverlay(focusIndex: catalogFocusIndex) {
@@ -1040,7 +1040,7 @@ struct CatalogListView: View {
                     )
                 }
             }
-            .accessibilityLabel(node.listTitle)
+            .accessibilityLabel(node.galleryAccessibilityLabel)
             .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
         case .photo(let photo):
             CatalogListRowPhotoButton(focusIndex: catalogFocusIndex) {
@@ -1074,7 +1074,7 @@ struct CatalogListView: View {
                     )
                 }
             }
-            .accessibilityLabel(node.listTitle)
+            .accessibilityLabel(node.galleryAccessibilityLabel)
             .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
         case .musicTrack:
             CatalogListRowFocusOverlay(focusIndex: catalogFocusIndex) {
@@ -1088,7 +1088,7 @@ struct CatalogListView: View {
                     )
                 }
             }
-            .accessibilityLabel(node.listTitle)
+            .accessibilityLabel(node.galleryAccessibilityLabel)
             .accessibilityIdentifier(catalogFocusAccessibilityID(for: catalogFocusIndex))
         }
     }
@@ -1262,6 +1262,14 @@ private struct CatalogGridTile: View, Equatable {
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(.primary)
+                    if let subtitle = node.listSubtitle {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .contentShape(Rectangle())
                 .catalogMetadataAdminContextMenu(
@@ -1275,7 +1283,7 @@ private struct CatalogGridTile: View, Equatable {
 #if os(tvOS)
         .tvCatalogTileFocus()
 #endif
-        .accessibilityLabel(node.listTitle)
+        .accessibilityLabel(node.galleryAccessibilityLabel)
         .accessibilityHint("Open item")
         .accessibilityIdentifier("catalogItem.\(catalogFocusIndex)")
     }

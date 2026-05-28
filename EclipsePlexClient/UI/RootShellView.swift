@@ -8,8 +8,14 @@ import SwiftUI
 import UIKit
 #endif
 
-/// Root UI: collapsible browse menu + detail (catalog). iPhone uses a leading overlay; iPad/Mac use split view.
+/// Root UI: sidebar + detail navigation shell across platforms.
 struct RootShellView: View {
+    private struct LibraryTransitionTarget: Equatable {
+        let serverID: UUID
+        let libraryID: String
+        let title: String
+    }
+
     @AppStorage("selectedPlexServerId") private var selectedServerIdString = ""
     @AppStorage("selectedPlexLibraryId") private var selectedLibraryIdString = ""
 
@@ -32,6 +38,8 @@ struct RootShellView: View {
     /// the detail column finishes switching (especially on iPhone where the
     /// browse overlay covers the detail loading banner for ~250 ms).
     @State private var pendingLibraryID: String?
+    @State private var libraryTransitionTarget: LibraryTransitionTarget?
+    @State private var libraryTransitionError: String?
     @State private var detailLoadingTimeoutTask: Task<Void, Never>?
     @State private var detailLoadingCompleteTask: Task<Void, Never>?
 
@@ -42,7 +50,8 @@ struct RootShellView: View {
     @State private var browseSheetPresented = false
     @State private var didPromptBrowseOnLaunch = false
 #endif
-#if os(iOS) || os(macOS)
+
+#if os(iOS) || os(macOS) || os(tvOS)
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 #endif
 
@@ -85,6 +94,23 @@ struct RootShellView: View {
         resolveSelectedLibrary(migrateStoredID: false)
     }
 
+    private var isLibraryTransitioning: Bool {
+        guard let target = libraryTransitionTarget else { return false }
+        guard target.serverID == selectedServerID else { return false }
+        return selectedPlexLibrary?.id != target.libraryID
+    }
+
+    private var syncStatusText: String {
+        if plexRegistry.librariesLoadingServerID != nil {
+            return "Syncing"
+        }
+        let pending = OfflineScrobbleQueue.diagnosticsSummary().pending
+        if pending > 0 {
+            return "Retrying"
+        }
+        return "Up to date"
+    }
+
     private var selectedServerID: UUID? {
         UUID(uuidString: selectedServerIdString)
     }
@@ -124,21 +150,33 @@ struct RootShellView: View {
             .onChange(of: showSettings) { _, showing in
                 focusCoordinator.browseKeyboardCommandsEnabled = !showing
             }
+            .onChange(of: scenePhase) { _, phase in
+                guard playbackPresenter.hasActiveSession else { return }
+                if phase == .background || phase == .inactive {
+                    PlaybackNowPlayingController.shared.activateAudioSessionIfNeeded()
+                }
+                if phase == .active {
+                    OfflineScrobbleQueue.scheduleFlush(servers: plexRegistry.allServers)
+                    Task {
+                        await downloadManager.pumpQueueIfAllowed()
+                    }
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexBrowseBack)) { _ in
                 handleBrowseBack()
             }
             .onChange(of: selectedLibraryIdString) { _, _ in
-                adoptDetailKeyboardFocusIfNeeded()
+                scheduleDetailFocusAdoption()
                 completeLibraryNavigationIfReady()
             }
             .onChange(of: libraryNavigationReadyKey) { _, _ in
                 completeLibraryNavigationIfReady()
             }
             .onChange(of: selectedServerIdString) { _, _ in
-                adoptDetailKeyboardFocusIfNeeded()
+                scheduleDetailFocusAdoption()
             }
             .onChange(of: catalogPath.count) { _, _ in
-                adoptDetailKeyboardFocusIfNeeded()
+                scheduleDetailFocusAdoption()
             }
             .environment(\.openBrowseMenu, OpenBrowseMenuAction(open: presentBrowseMenu))
             .environment(\.dismissBrowseMenu, DismissBrowseMenuAction(dismiss: dismissBrowseMenu))
@@ -209,9 +247,6 @@ struct RootShellView: View {
                 invalidateLibrarySelectionIfNeeded()
                 adoptDetailKeyboardFocusIfNeeded()
                 offerAddServerIfNeeded()
-#if os(iOS) || os(tvOS)
-                promptBrowseMenuIfNeeded()
-#endif
             }
             .task(id: selectedServerIdString) {
                 if let server = selectedPlexServer, !server.isDownloadsServer {
@@ -225,21 +260,6 @@ struct RootShellView: View {
             .onChange(of: plexRegistry.librariesByServerID) { _, _ in
                 applyPendingLibrarySelectionIfNeeded()
             }
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .active {
-                    OfflineScrobbleQueue.scheduleFlush(servers: plexRegistry.allServers)
-                    Task {
-                        await downloadManager.pumpQueueIfAllowed()
-                    }
-                }
-            }
-#if os(iOS) || os(tvOS)
-            .onChange(of: showAddPlexServer) { wasShowing, isShowing in
-                if wasShowing, !isShowing {
-                    promptBrowseMenuIfNeeded()
-                }
-            }
-#endif
     }
 
     @ViewBuilder
@@ -270,11 +290,12 @@ struct RootShellView: View {
                     }
                     .transition(.opacity)
                     .zIndex(1)
-
-                browseOverlayPanel
-                    .transition(.move(edge: .leading))
-                    .zIndex(2)
             }
+            browseOverlayPanel
+                .offset(x: browseSheetPresented ? 0 : -min(320, UIScreen.main.bounds.width * 0.88))
+                .opacity(browseSheetPresented ? 1 : 0.001)
+                .allowsHitTesting(browseSheetPresented)
+                .zIndex(2)
 
             // During library navigation the detail-column loading banner sits
             // underneath the browse sheet. Mirror it above the sheet so the
@@ -284,7 +305,13 @@ struct RootShellView: View {
                     .zIndex(3)
                     .transition(.opacity)
             }
+
+            if !browseSheetPresented, !playbackPresenter.hasActiveSession {
+                reopenMenuButton
+                    .zIndex(4)
+            }
         }
+        .animation(.easeInOut(duration: 0.25), value: browseSheetPresented)
     }
 
     private var browseOverlayPanel: some View {
@@ -305,6 +332,25 @@ struct RootShellView: View {
         #endif
     }
 
+    private var reopenMenuButton: some View {
+        VStack {
+            HStack {
+                Button(action: presentBrowseMenu) {
+                    Image(systemName: "sidebar.left")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 38, height: 38)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .disabled(playbackPresenter.hasActiveSession)
+                .accessibilityIdentifier("browseMenuReopenOverlayButton")
+                .padding(.leading, 12)
+                .padding(.top, 8)
+                Spacer()
+            }
+            Spacer()
+        }
+    }
+
     #if os(iOS)
     private var ipadSplitShell: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -315,7 +361,9 @@ struct RootShellView: View {
     }
 
     private func collapseSplitSidebar() {
+#if os(iOS)
         guard horizontalSizeClass == .compact else { return }
+#endif
         withAnimation(.easeInOut(duration: 0.25)) {
             columnVisibility = .detailOnly
         }
@@ -327,7 +375,7 @@ struct RootShellView: View {
         }
     }
     #endif
-#endif
+    #endif
 
 #if os(macOS)
     private var splitShell: some View {
@@ -393,7 +441,8 @@ struct RootShellView: View {
                 guard let server = selectedPlexServer else { return }
                 Task { await plexRegistry.refreshLibraries(for: server) }
             },
-            isAggregateHomeSelected: selectedServerID == nil
+            isAggregateHomeSelected: selectedServerID == nil,
+            menuControlsDisabled: playbackPresenter.hasActiveSession
         )
     }
 
@@ -401,7 +450,9 @@ struct RootShellView: View {
         ZStack {
             NavigationStack(path: $catalogPath) {
                 Group {
-                    if let server = selectedPlexServer, let library = selectedPlexLibrary {
+                    if let target = libraryTransitionTarget, isLibraryTransitioning {
+                        libraryLoadingDetail(title: target.title)
+                    } else if let server = selectedPlexServer, let library = selectedPlexLibrary {
                         Group {
                             if server.isDownloadsServer {
                                 CatalogListView(
@@ -415,8 +466,6 @@ struct RootShellView: View {
                                 LibraryDetailView(plexServer: server, library: library)
                             }
                         }
-                        .browseMenuToolbar()
-                        .id("\(server.id.uuidString)|\(library.id)")
                     } else if let server = selectedPlexServer, server.isDownloadsServer {
                         DownloadsHomeDetailView()
                     } else if let server = selectedPlexServer {
@@ -442,35 +491,7 @@ struct RootShellView: View {
                 }
             }
             .offlineDownloads(downloadManager)
-            .toolbar {
-            ToolbarItem(placement: .automatic) {
-                if let server = selectedPlexServer, server.usesLivePlexAPI {
-                    Button {
-                        presentServerSearch()
-                    } label: {
-                        Label("Search", systemImage: "magnifyingglass")
-                    }
-                    .accessibilityIdentifier("serverSearchButton")
-                }
-            }
-            ToolbarItem(placement: .automatic) {
-                if let server = selectedPlexServer, server.usesLivePlexAPI {
-                    Button {
-                        Task { await plexRegistry.refreshLibraries(for: server) }
-                    } label: {
-                        Label("Refresh Libraries", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(plexRegistry.librariesLoadingServerID == server.id)
-                }
-            }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showAddPlexServer = true
-                    } label: {
-                        Label("Add Plex Server", systemImage: "plus")
-                    }
-                }
-            }
+            .toolbar { detailToolbar }
 
             if let message = detailLoadingMessage {
                 detailLoadingBanner(message: message)
@@ -497,9 +518,65 @@ struct RootShellView: View {
         .allowsHitTesting(false)
     }
 
+    private func libraryLoadingDetail(title: String) -> some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text("Loading \(title)…")
+                .font(.headline)
+            Text("Preparing library content")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if let libraryTransitionError {
+                Text(libraryTransitionError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                HStack(spacing: 12) {
+                    Button("Retry", action: retryLibraryTransition)
+                        .buttonStyle(.pressableBorderedProminent)
+                    Button("Switch server", action: switchServerFromTransition)
+                        .buttonStyle(.pressableBordered)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.001))
+    }
+
+    private func retryLibraryTransition() {
+        guard let target = libraryTransitionTarget else { return }
+        libraryTransitionError = nil
+        beginDetailLoading(message: "Loading \(target.title)…", persistUntilCleared: true)
+        scheduleDetailLoadingTimeout()
+        if let server = selectedPlexServer, !server.isDownloadsServer {
+            Task {
+                await plexRegistry.refreshLibraries(for: server)
+                await MainActor.run {
+                    completeLibraryNavigationIfReady()
+                }
+            }
+        } else {
+            DispatchQueue.main.async {
+                completeLibraryNavigationIfReady()
+            }
+        }
+    }
+
+    private func switchServerFromTransition() {
+        libraryTransitionTarget = nil
+        libraryTransitionError = nil
+        selectedLibraryIdString = ""
+        clearDetailLoading()
+        focusCoordinator.focusSidebar()
+        presentBrowseMenu()
+    }
+
     // MARK: - Selection
 
     private func selectAllServersHome() {
+        libraryTransitionTarget = nil
+        libraryTransitionError = nil
         setSelectedServerID(nil)
         selectedLibraryIdString = ""
         resetCatalogNavigation()
@@ -515,6 +592,8 @@ struct RootShellView: View {
 
     private func selectServer(_ id: UUID) {
         guard selectedServerID != id else { return }
+        libraryTransitionTarget = nil
+        libraryTransitionError = nil
         setSelectedServerID(id)
         selectedLibraryIdString = ""
         resetCatalogNavigation()
@@ -523,6 +602,8 @@ struct RootShellView: View {
     }
 
     private func selectHome() {
+        libraryTransitionTarget = nil
+        libraryTransitionError = nil
         if selectedLibraryIdString.isEmpty {
             dismissBrowseMenu()
             return
@@ -534,6 +615,8 @@ struct RootShellView: View {
     }
 
     private func selectPlaylists() {
+        libraryTransitionTarget = nil
+        libraryTransitionError = nil
         selectedLibraryIdString = ""
         catalogPath = NavigationPath()
         catalogPath.append(CatalogNavigationRoute.serverPlaylists)
@@ -544,6 +627,13 @@ struct RootShellView: View {
 #if os(iOS)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
 #endif
+        guard let serverID = selectedServerID else { return }
+        libraryTransitionTarget = LibraryTransitionTarget(
+            serverID: serverID,
+            libraryID: library.id,
+            title: library.title
+        )
+        libraryTransitionError = nil
         // Mark pending immediately so the sidebar row shows a spinner on the
         // same frame as the tap — don't wait for the detail column to catch up.
         pendingLibraryID = library.id
@@ -592,6 +682,10 @@ struct RootShellView: View {
         detailLoadingCompleteTask = nil
         detailLoadingMessage = nil
         pendingLibraryID = nil
+        if !isLibraryTransitioning {
+            libraryTransitionTarget = nil
+            libraryTransitionError = nil
+        }
     }
 
     /// Safety valve so a stuck network fetch can't leave the banner up forever.
@@ -600,7 +694,11 @@ struct RootShellView: View {
         detailLoadingTimeoutTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard !Task.isCancelled else { return }
-            clearDetailLoading()
+            if isLibraryTransitioning {
+                libraryTransitionError = "Still waiting for library data. You can retry or switch servers."
+            } else {
+                clearDetailLoading()
+            }
         }
     }
 
@@ -613,10 +711,16 @@ struct RootShellView: View {
               resolved.id == targetID
         else { return }
 
+        if libraryTransitionTarget?.libraryID == targetID {
+            libraryTransitionTarget = nil
+            libraryTransitionError = nil
+        }
+
         detailLoadingCompleteTask?.cancel()
         detailLoadingCompleteTask = Task { @MainActor in
-            // Keep the banner visible long enough to read during fast cache hits.
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            // Keep the banner visible briefly so taps feel acknowledged without
+            // delaying the first library transition.
+            try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled else { return }
             if selectedPlexLibrary?.id == targetID {
                 clearDetailLoading()
@@ -647,6 +751,13 @@ struct RootShellView: View {
 
     private var isHomeDetailVisible: Bool {
         catalogPath.isEmpty && selectedPlexLibrary == nil && selectedPlexServer?.isDownloadsServer != true
+    }
+
+    private func scheduleDetailFocusAdoption() {
+        DispatchQueue.main.async {
+            guard !isLibraryTransitioning else { return }
+            adoptDetailKeyboardFocusIfNeeded()
+        }
     }
 
     /// Changes when a sidebar library tap can resolve into `LibraryDetailView`.
@@ -725,20 +836,7 @@ struct RootShellView: View {
     }
 
 #if os(iOS) || os(tvOS)
-    private func promptBrowseMenuIfNeeded() {
-        #if os(tvOS)
-        guard !didPromptBrowseOnLaunch else { return }
-        #else
-        guard usesBrowseOverlay, !didPromptBrowseOnLaunch else { return }
-        #endif
-        guard !showAddPlexServer else { return }
-        didPromptBrowseOnLaunch = true
-        if selectedPlexLibrary == nil {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                browseSheetPresented = true
-            }
-        }
-    }
+    private func promptBrowseMenuIfNeeded() {}
 
 #elseif os(macOS)
     private func showSplitSidebar() {
@@ -872,6 +970,69 @@ struct RootShellView: View {
             browseSheetPresented = true
         }
 #endif
+    }
+
+    @ToolbarContentBuilder
+    private var detailToolbar: some ToolbarContent {
+        #if os(iOS) || os(tvOS)
+        ToolbarItem(placement: .topBarLeading) {
+            Button(action: presentBrowseMenu) {
+                Label("Browse", systemImage: "sidebar.left")
+            }
+            .disabled(playbackPresenter.hasActiveSession)
+            .accessibilityIdentifier("browseMenuButton")
+        }
+        #endif
+
+        if catalogPath.isEmpty,
+           let server = selectedPlexServer,
+           server.usesLivePlexAPI,
+           !server.isDownloadsServer {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    presentServerSearch()
+                } label: {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
+                .accessibilityIdentifier("serverSearchButton")
+            }
+        }
+
+        if catalogPath.isEmpty,
+           let server = selectedPlexServer,
+           server.usesLivePlexAPI,
+           selectedPlexLibrary == nil {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    Task { await plexRegistry.refreshLibraries(for: server) }
+                } label: {
+                    Label("Refresh Libraries", systemImage: "arrow.clockwise")
+                }
+                .disabled(plexRegistry.librariesLoadingServerID == server.id)
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    serverManagementServer = server
+                } label: {
+                    Label("Server management", systemImage: "server.rack")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showAddPlexServer = true
+                } label: {
+                    Label("Add Plex Server", systemImage: "plus")
+                }
+            }
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Text(syncStatusText)
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.thinMaterial, in: Capsule())
+        }
     }
 }
 

@@ -28,6 +28,14 @@ struct SettingsView: View {
     @State private var showSignOutConfirm = false
     @State private var showAddServer = false
     @State private var showClearArtworkConfirm = false
+    @AppStorage("appVisualTheme") private var visualThemeRaw = AppVisualTheme.eclipse.rawValue
+
+    private var visualThemeBinding: Binding<AppVisualTheme> {
+        Binding(
+            get: { AppVisualTheme(rawValue: visualThemeRaw) ?? .eclipse },
+            set: { visualThemeRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         Form {
@@ -64,6 +72,18 @@ struct SettingsView: View {
                     .onChange(of: preferHLS) { _, value in
                         PlaybackPreferences.preferHLSTranscode = value
                     }
+            }
+
+            Section("Theme") {
+                Picker("Visual theme", selection: visualThemeBinding) {
+                    ForEach(AppVisualTheme.allCases) { theme in
+                        HStack(spacing: 10) {
+                            AppThemeSwatch(theme: theme)
+                            Text(theme.label)
+                        }
+                        .tag(theme)
+                    }
+                }
             }
 
             Section("Downloads") {

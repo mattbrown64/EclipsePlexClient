@@ -59,6 +59,8 @@ struct MacVLCPlayerView: NSViewRepresentable {
         private var didNotifyNaturalEnd = false
         private var lastControllerSyncTime: CFAbsoluteTime = 0
         private var lastPositionSaveTime: CFAbsoluteTime = 0
+        private var lastTickPositionMs = 0
+        private var playbackInferredFromTicks = false
         private var pendingPlaybackUpdate: ResolvedPlayback?
         private var isProcessingPlaybackUpdate = false
 
@@ -151,6 +153,8 @@ struct MacVLCPlayerView: NSViewRepresentable {
             lastPublishedState = nil
             didNotifyNaturalEnd = false
             lastControllerSyncTime = 0
+            lastTickPositionMs = 0
+            playbackInferredFromTicks = false
             errorMessage.wrappedValue = nil
 
             let url = candidate.url
@@ -191,6 +195,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
             guard let player = aNotification.object as? VLCMediaPlayer else { return }
             configureAudioIfNeeded(player)
             applyResumeIfNeeded(player)
+            promotePlayingStateIfTimeIsAdvancing(player)
             publishState(from: player)
             persistPositionPeriodically(from: player)
         }
@@ -257,6 +262,11 @@ struct MacVLCPlayerView: NSViewRepresentable {
             }
 
             let state = player.state
+            if playbackInferredFromTicks,
+               lastPublishedState == .playing,
+               state == .buffering || state == .opening {
+                return
+            }
             guard state != lastPublishedState else { return }
             lastPublishedState = state
 
@@ -266,6 +276,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
 
             switch state {
             case .playing:
+                playbackInferredFromTicks = false
                 updateStatus { self.errorMessage.wrappedValue = nil }
                 configureAudioIfNeeded(player)
                 if !self.didApplyPreferredSubtitle {
@@ -362,6 +373,24 @@ struct MacVLCPlayerView: NSViewRepresentable {
 
         private func updateStatus(_ block: @escaping () -> Void) {
             DispatchQueue.main.async(execute: block)
+        }
+
+        private func promotePlayingStateIfTimeIsAdvancing(_ player: VLCMediaPlayer) {
+            let position = Int(player.time.intValue)
+            guard position > lastTickPositionMs + 150 else { return }
+            lastTickPositionMs = position
+
+            let vlcReportsLoading = player.state == .buffering || player.state == .opening
+            guard vlcReportsLoading || lastPublishedState == .buffering || lastPublishedState == .opening else {
+                return
+            }
+
+            playbackInferredFromTicks = vlcReportsLoading
+            guard lastPublishedState != .playing else { return }
+            lastPublishedState = .playing
+            updateStatus {
+                self.statusText.wrappedValue = "Playing"
+            }
         }
 
         private func stateName(_ state: VLCMediaPlayerState) -> String {

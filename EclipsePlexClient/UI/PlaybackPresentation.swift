@@ -3,9 +3,10 @@
 //  EclipsePlexClient
 //
 
+import Foundation
 import SwiftUI
 
-/// Identifiable wrapper for `fullScreenCover` playback on iOS.
+/// Identifiable wrapper for playback presentation on tvOS.
 struct PlaybackPresentationItem: Identifiable, Hashable {
     let request: PlaybackRequest
 
@@ -34,6 +35,48 @@ struct PlaybackCoverDependencies {
     let plexRegistry: PlexServerRegistry
 }
 
+/// Keeps one `ContentView` / VLC instance alive across full-screen and mini modes.
+struct PlaybackSessionRoot: View {
+    @ObservedObject var presenter: PlaybackPresenter
+    let dependencies: PlaybackCoverDependencies
+
+    var body: some View {
+        Group {
+            if let request = presenter.activeRequest {
+                PlaybackCoverHost(
+                    request: request,
+                    isCompactSession: presenter.presentationMode == .mini,
+                    dependencies: dependencies
+                )
+                .environmentObject(presenter)
+                .modifier(PlaybackSessionLayout(mode: presenter.presentationMode))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: presenter.presentationMode)
+    }
+}
+
+private struct PlaybackSessionLayout: ViewModifier {
+    let mode: PlaybackPresentationMode
+
+    func body(content: Content) -> some View {
+        switch mode {
+        case .fullScreen:
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+                .zIndex(1000)
+        case .mini:
+            content
+                .frame(width: 1, height: 1)
+                .opacity(0.001)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .zIndex(-1)
+        }
+    }
+}
+
 extension View {
     /// Presents `ContentView` edge-to-edge on iPhone / iPad (avoids navigation bar layout).
     @ViewBuilder
@@ -43,7 +86,11 @@ extension View {
     ) -> some View {
 #if os(iOS)
         fullScreenCover(item: item) { presented in
-            PlaybackCoverHost(request: presented.request, dependencies: dependencies)
+            PlaybackCoverHost(
+                request: presented.request,
+                isCompactSession: false,
+                dependencies: dependencies
+            )
         }
 #else
         self
@@ -54,10 +101,11 @@ extension View {
 /// Hosts `ContentView` in a platform presentation with required dependencies wired in.
 struct PlaybackCoverHost: View {
     let request: PlaybackRequest
+    var isCompactSession = false
     let dependencies: PlaybackCoverDependencies
 
     var body: some View {
-        ContentView(request: request)
+        ContentView(request: request, isCompactSession: isCompactSession)
             .offlineDownloads(dependencies.downloadManager)
             .environmentObject(dependencies.focusCoordinator)
             .environmentObject(dependencies.plexRegistry)

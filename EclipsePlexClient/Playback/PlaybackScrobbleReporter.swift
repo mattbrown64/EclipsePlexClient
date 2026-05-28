@@ -4,12 +4,14 @@ import Foundation
 @MainActor
 enum PlaybackScrobbleReporter {
     private static var reportedSessionEndKeys = Set<String>()
+    private static var toastThrottleKeys = Set<String>()
     private static var periodicTask: Task<Void, Never>?
     private static let periodicIntervalNanoseconds: UInt64 = 45_000_000_000
 
     static func resetSession() {
         stopPeriodicReporting()
         reportedSessionEndKeys.removeAll()
+        toastThrottleKeys.removeAll()
     }
 
     /// Begin reporting progress and "playing" timeline to Plex every ~45s while the player is visible.
@@ -21,17 +23,19 @@ enum PlaybackScrobbleReporter {
         stopPeriodicReporting()
         guard request?.scrobbleServerAndRatingKey != nil else { return }
 
+        Task {
+            await reportPlayingTimeline(
+                request: request,
+                positionMs: positionMs(),
+                durationMs: durationMs()
+            )
+        }
+
         periodicTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: periodicIntervalNanoseconds)
                 guard !Task.isCancelled else { break }
-                await reportProgress(
-                    request: request,
-                    positionMs: positionMs(),
-                    durationMs: durationMs(),
-                    isSessionEnd: false
-                )
-                await reportPlayingTimeline(
+                await reportPeriodic(
                     request: request,
                     positionMs: positionMs(),
                     durationMs: durationMs()
@@ -52,8 +56,13 @@ enum PlaybackScrobbleReporter {
         durationMs: Int
     ) async {
         stopPeriodicReporting()
-        await reportTimelineStopped(request: request, positionMs: positionMs, durationMs: durationMs)
-        await reportProgress(
+        let timelineOk = await reportTimelineStopped(request: request, positionMs: positionMs, durationMs: durationMs)
+        if timelineOk {
+            guard let (server, ratingKey) = request?.scrobbleServerAndRatingKey else { return }
+            reportedSessionEndKeys.insert("\(server.id.uuidString)|\(ratingKey)")
+            return
+        }
+        await reportProgressFallback(
             request: request,
             positionMs: positionMs,
             durationMs: durationMs,
@@ -65,11 +74,10 @@ enum PlaybackScrobbleReporter {
         request: PlaybackRequest?,
         positionMs: Int,
         durationMs: Int
-    ) async {
+    ) async -> Bool {
         guard let (server, ratingKey) = request?.scrobbleServerAndRatingKey,
-              server.usesLivePlexAPI,
-              positionMs > 0
-        else { return }
+              server.usesLivePlexAPI
+        else { return false }
         do {
             let client = try PlexMediaServerClient(server: server)
             try await client.reportTimeline(
@@ -78,8 +86,17 @@ enum PlaybackScrobbleReporter {
                 timeMs: positionMs,
                 durationMs: durationMs
             )
+            return true
         } catch {
             AppLog.network("Plex timeline playing failed: \(error.localizedDescription)")
+            OfflineScrobbleQueue.enqueue(
+                serverId: server.id,
+                ratingKey: ratingKey,
+                positionMs: max(positionMs, 0),
+                durationMs: max(durationMs, 0),
+                markPlayed: false
+            )
+            return false
         }
     }
 
@@ -87,10 +104,10 @@ enum PlaybackScrobbleReporter {
         request: PlaybackRequest?,
         positionMs: Int,
         durationMs: Int
-    ) async {
+    ) async -> Bool {
         guard let (server, ratingKey) = request?.scrobbleServerAndRatingKey,
               server.usesLivePlexAPI
-        else { return }
+        else { return false }
         do {
             let client = try PlexMediaServerClient(server: server)
             try await client.reportTimeline(
@@ -99,12 +116,40 @@ enum PlaybackScrobbleReporter {
                 timeMs: positionMs,
                 durationMs: durationMs
             )
+            return true
         } catch {
             AppLog.network("Plex timeline stopped failed: \(error.localizedDescription)")
+            OfflineScrobbleQueue.enqueue(
+                serverId: server.id,
+                ratingKey: ratingKey,
+                positionMs: max(positionMs, 0),
+                durationMs: max(durationMs, 0),
+                markPlayed: true
+            )
+            return false
         }
     }
 
-    private static func reportProgress(
+    private static func reportPeriodic(
+        request: PlaybackRequest?,
+        positionMs: Int,
+        durationMs: Int
+    ) async {
+        let timelineOk = await reportPlayingTimeline(
+            request: request,
+            positionMs: positionMs,
+            durationMs: durationMs
+        )
+        guard !timelineOk else { return }
+        await reportProgressFallback(
+            request: request,
+            positionMs: positionMs,
+            durationMs: durationMs,
+            isSessionEnd: false
+        )
+    }
+
+    private static func reportProgressFallback(
         request: PlaybackRequest?,
         positionMs: Int,
         durationMs: Int,
@@ -130,10 +175,8 @@ enum PlaybackScrobbleReporter {
             let client = try PlexMediaServerClient(server: server)
             if nearEnd {
                 try await client.markItemPlayed(ratingKey: ratingKey, durationMs: safeDuration)
-            } else if safePosition > 5_000 {
-                try await client.reportPlaybackProgress(ratingKey: ratingKey, timeMs: safePosition)
             } else {
-                return
+                try await client.reportPlaybackProgress(ratingKey: ratingKey, timeMs: safePosition)
             }
             if isSessionEnd {
                 reportedSessionEndKeys.insert(sessionKey)
@@ -144,7 +187,11 @@ enum PlaybackScrobbleReporter {
         } catch {
             AppLog.network("Plex watch report failed: \(error.localizedDescription)")
             if !isSessionEnd {
-                AppToastCenter.show("Couldn’t sync watch progress to Plex.")
+                let toastKey = "\(server.id.uuidString)|\(ratingKey)"
+                if !toastThrottleKeys.contains(toastKey) {
+                    toastThrottleKeys.insert(toastKey)
+                    AppToastCenter.show("Couldn’t sync watch progress to Plex.")
+                }
             }
             OfflineScrobbleQueue.enqueue(
                 serverId: server.id,

@@ -2,9 +2,18 @@
 
 SwiftUI Plex client for **iOS**, **iPadOS**, **macOS**, and **tvOS**. Browse libraries, play media with VLC, and manage offline downloads.
 
+## Features
+
+- Plex PIN sign-in, server discovery, and manual server add
+- VLC playback with direct play, transcode, and optional HLS / Picture in Picture (see [Docs/VLCUI.md](Docs/VLCUI.md))
+- Mini player bar while browsing; lock-screen Now Playing on iOS
+- Visual themes, keyboard navigation (Mac / iPad), and Siri Remote focus on tvOS
+- Offline downloads with background resume (iOS) and scrobble retry
+- Server management and metadata tools for admin-capable servers (see [Docs/ServerManagement.md](Docs/ServerManagement.md))
+
 ## Requirements
 
-- Xcode 16+ (project uses current Apple SDK deployment targets)
+- Xcode 16+ with SDKs for **iOS 26+**, **macOS 14+**, and **tvOS 17+** (aligned in project, Podfile, and CI)
 - [CocoaPods](https://cocoapods.org/) for iOS / tvOS VLCKit
 - macOS: vendored `Frameworks/VLCKit.xcframework` (see [Docs/VLCUI.md](Docs/VLCUI.md))
 
@@ -47,7 +56,7 @@ Full list: [Docs/KeyboardShortcuts.md](Docs/KeyboardShortcuts.md) and **Settings
 
 **Unit tests** (`EclipsePlexClientTests`, Swift Testing): keyboard focus coordinator, sidebar row order, catalog grid layout, Plex markers/XML, offline download catalog/validator, sample search, playback preferences, and more.
 
-**UI tests** (`EclipsePlexClientUITests`): launch smoke and browse sidebar with `-UITestSeedSampleData` (fixture servers/libraries).
+**UI tests** (`EclipsePlexClientUITests`): launch smoke, browse sidebar, and playback chrome with `-UITestSeedSampleData` (fixture servers/libraries).
 
 ```bash
 # Unit tests (macOS)

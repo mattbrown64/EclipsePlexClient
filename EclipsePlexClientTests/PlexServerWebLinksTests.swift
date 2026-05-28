@@ -3,6 +3,7 @@
 //  EclipsePlexClientTests
 //
 
+import Foundation
 import Testing
 @testable import EclipsePlexClient
 
@@ -14,8 +15,10 @@ struct PlexServerWebLinksTests {
             plexResourceClientIdentifier: "abc-123"
         )
         let url = server.plexWebMetadataURL(ratingKey: "42")
-        #expect(url?.absoluteString.contains("abc-123") == true)
-        #expect(url?.absoluteString.contains("%2Flibrary%2Fmetadata%2F42") == true)
+        #expect(url != nil)
+        let absolute = url!.absoluteString
+        #expect(absolute.contains("abc-123"))
+        #expect(absolute.contains("/library/metadata/42"))
     }
 
     @Test func localWebMetadataURLUsesOrigin() {
@@ -24,7 +27,9 @@ struct PlexServerWebLinksTests {
             hostDescription: "http://192.168.1.5:32400"
         )
         let url = server.localWebMetadataURL(ratingKey: "/library/metadata/99")
-        #expect(url?.absoluteString.contains("192.168.1.5:32400") == true)
-        #expect(url?.absoluteString.contains("metadata%2F99") == true)
+        #expect(url != nil)
+        let absolute = url!.absoluteString
+        #expect(absolute.contains("192.168.1.5:32400"))
+        #expect(absolute.contains("/library/metadata/99"))
     }
 }

@@ -141,7 +141,6 @@ struct DownloadsHomeDetailView: View {
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif
-        .browseMenuToolbar()
     }
 
     private func byteCount(_ bytes: Int64) -> String {

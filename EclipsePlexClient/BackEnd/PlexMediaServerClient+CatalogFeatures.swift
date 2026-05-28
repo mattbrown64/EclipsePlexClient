@@ -217,18 +217,18 @@ extension PlexMediaServerClient {
         if let durationMs, durationMs > 0 {
             query.append(URLQueryItem(name: "duration", value: String(durationMs)))
         }
-        _ = try await fetchOnePage(path: "/:/scrobble", query: query)
+        try await performScrobbleCommand(path: "/:/scrobble", query: query)
     }
 
     func markItemUnwatched(ratingKey: String) async throws {
-        _ = try await fetchOnePage(path: "/:/unscrobble", query: scrobbleQuery(ratingKey: ratingKey))
+        try await performScrobbleCommand(path: "/:/unscrobble", query: scrobbleQuery(ratingKey: ratingKey))
     }
 
     func reportPlaybackProgress(ratingKey: String, timeMs: Int) async throws {
         var query = scrobbleQuery(ratingKey: ratingKey)
         query.append(URLQueryItem(name: "time", value: String(max(0, timeMs))))
         query.append(URLQueryItem(name: "state", value: "playing"))
-        _ = try await fetchOnePage(path: "/:/progress", query: query)
+        try await performScrobbleCommand(path: "/:/progress", query: query)
     }
 
     func reportTimeline(
@@ -242,7 +242,7 @@ extension PlexMediaServerClient {
         query.append(URLQueryItem(name: "state", value: state))
         query.append(URLQueryItem(name: "time", value: String(max(0, timeMs))))
         query.append(URLQueryItem(name: "duration", value: String(max(0, durationMs))))
-        _ = try await fetchOnePage(path: "/:/timeline", query: query)
+        try await performScrobbleCommand(path: "/:/timeline", query: query)
     }
 
     // MARK: - Playback & downloads

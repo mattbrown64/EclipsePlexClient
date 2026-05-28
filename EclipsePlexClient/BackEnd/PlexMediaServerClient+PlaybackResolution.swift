@@ -73,6 +73,55 @@ extension PlexMediaServerClient {
         )
     }
 
+    /// HLS transcode URL for AVPlayer / AirPlay / Picture in Picture.
+    func resolveHLSPlaybackStream(
+        ratingKey: String,
+        server: PlexServer,
+        options: PlaybackStreamOptions,
+        cachedSources: PlexPlaybackXMLParser.Sources? = nil
+    ) async throws -> PlexPlaybackStream {
+        let sources: PlexPlaybackXMLParser.Sources
+        if let cachedSources {
+            sources = cachedSources
+        } else {
+            sources = try await fetchPlaybackSources(ratingKey: ratingKey)
+        }
+        let sessionID = UUID().uuidString
+        var hlsQuery = server.plexTranscodeQueryItems(
+            sessionID: sessionID,
+            metadataPath: sources.metadataPath,
+            mediaIndex: sources.mediaIndex,
+            partIndex: sources.partIndex,
+            protocol: "hls",
+            directPlay: "0",
+            directStream: "0"
+        )
+        hlsQuery.removeAll { $0.name == "subtitles" }
+        hlsQuery.append(
+            URLQueryItem(name: "subtitles", value: options.subtitleSelection.plexTranscodeValue)
+        )
+        if options.videoResolution.forcesTranscode {
+            hlsQuery = hlsQuery.map { item in
+                if item.name == "videoResolution" {
+                    return URLQueryItem(name: "videoResolution", value: options.videoResolution.plexVideoResolution)
+                }
+                return item
+            }
+            if !hlsQuery.contains(where: { $0.name == "videoResolution" }) {
+                hlsQuery.append(
+                    URLQueryItem(name: "videoResolution", value: options.videoResolution.plexVideoResolution)
+                )
+            }
+        }
+        return try makeTranscodeStream(
+            endpoint: "/video/:/transcode/universal/start.m3u8",
+            query: hlsQuery,
+            vlcHeaders: server.vlcHTTPHeaderFields,
+            label: "HLS transcode",
+            delivery: .transcodeHLS
+        )
+    }
+
     func makeTranscodeStream(
         endpoint: String,
         query: [URLQueryItem],

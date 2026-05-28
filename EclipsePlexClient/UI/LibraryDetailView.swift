@@ -56,10 +56,12 @@ struct LibraryDetailView: View {
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif
-        .browseMenuToolbar()
         .onAppear {
             loadSavedTab()
             adoptFocus(for: selectedTab)
+        }
+        .onChange(of: library.id) { _, _ in
+            loadSavedTab()
         }
     }
 

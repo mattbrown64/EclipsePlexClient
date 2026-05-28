@@ -62,10 +62,14 @@ See the [VLCUI README](https://github.com/LePips/VLCUI) for proxies, state callb
 ## Dependencies
 
 - **VLCUI sources:** vendored under `EclipsePlexClient/Playback/VLCUI/` ([upstream](https://github.com/LePips/VLCUI) 0.8.1) — compiled in-app so CocoaPods can supply `MobileVLCKit`
-- **CocoaPods:** `MobileVLCKit ~> 3.6.0` (iOS only)
+- **CocoaPods:** `MobileVLCKit ~> 3.7.0` (iOS only)
 - **Vendored:** VLCKit 3.6.0 XCFramework for macOS ([VideoLAN download](https://download.videolan.org/pub/cocoapods/prod/))
 
 VLCKit is LGPL — see [VideoLAN VLCKit](https://github.com/videolan/vlckit).
+
+### Picture in Picture (iOS / iPad / Mac)
+
+System PiP uses **AVKit** with a Plex **HLS transcode** URL (`/video/:/transcode/universal/start.m3u8`), not VLCKit’s in-development PiP APIs (not yet in CocoaPods binaries). VLC pauses while PiP plays; when PiP ends, playback resumes in VLC at the PiP position.
 
 ### macOS: dyld crash on launch
 

@@ -36,7 +36,6 @@ struct AggregateHomeDetailView: View {
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif
-        .browseMenuToolbar()
         .refreshable {
             await reloadShelves(invalidateCache: true)
         }

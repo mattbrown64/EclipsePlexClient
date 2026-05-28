@@ -56,7 +56,6 @@ struct ServerPlaylistsView: View {
             }
         }
         .navigationTitle("Playlists")
-        .browseMenuToolbar()
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {

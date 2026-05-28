@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// Public URLs for legal/support (update before App Store release).
+/// Public URLs for legal/support.
 enum EclipsePlexLinks {
     /// Privacy policy — host `Docs/PrivacyPolicy.md` or your website.
     static let privacyPolicy = URL(string: "https://github.com/mattbrown64/EclipsePlexClient/blob/main/Docs/PrivacyPolicy.md")!

@@ -61,6 +61,19 @@ struct MediaDetailView: View {
                 }
 
                 if let detail {
+                    watchProgressSection(detail)
+                    watchControls
+                    if node.supportsVideoPlayback,
+                       let ratingKey = playbackRatingKey,
+                       !plexServer.isDownloadsServer {
+                        DownloadControls(
+                            plexServer: plexServer,
+                            ratingKey: ratingKey,
+                            title: detailTitle,
+                            thumbPath: node.listThumbPath
+                        )
+                        .offlineDownloads(downloadManager)
+                    }
                     enrichedMetadata(detail)
                 }
                 if !extras.isEmpty {
@@ -101,7 +114,6 @@ struct MediaDetailView: View {
                 } else {
                     metaLine("Server", plexServer.name)
                 }
-                watchControls
                 if let ratingKey = playbackRatingKey {
                     MediaMetadataAdminSection(
                         plexServer: plexServer,
@@ -121,17 +133,6 @@ struct MediaDetailView: View {
                         }
                     )
                     .environmentObject(plexRegistry)
-                }
-                if node.supportsVideoPlayback,
-                   let ratingKey = playbackRatingKey,
-                   !plexServer.isDownloadsServer {
-                    DownloadControls(
-                        plexServer: plexServer,
-                        ratingKey: ratingKey,
-                        title: detailTitle,
-                        thumbPath: node.listThumbPath
-                    )
-                    .offlineDownloads(downloadManager)
                 }
                 if plexServer.isDownloadsServer, let record = offlineRecord {
                     offlineFileActions(record: record)
@@ -295,7 +296,7 @@ struct MediaDetailView: View {
     }
 
     @ViewBuilder
-    private func enrichedMetadata(_ detail: PlexMediaDetail) -> some View {
+    private func watchProgressSection(_ detail: PlexMediaDetail) -> some View {
         if let fraction = detail.watchProgressFraction {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Watch progress")
@@ -304,6 +305,10 @@ struct MediaDetailView: View {
                 ProgressView(value: fraction)
             }
         }
+    }
+
+    @ViewBuilder
+    private func enrichedMetadata(_ detail: PlexMediaDetail) -> some View {
         if let rating = detail.rating {
             metaLine("Critic rating", String(format: "%.1f", rating))
         }

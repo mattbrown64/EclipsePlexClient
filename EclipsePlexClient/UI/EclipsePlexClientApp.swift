@@ -18,10 +18,20 @@ struct EclipsePlexClientApp: App {
 
     init() {
         CrashReporter.start()
+        _ = AppThemeStorage.loadVisualTheme()
     }
     @StateObject private var toastCenter = AppToastCenter()
     @StateObject private var focusCoordinator = KeyboardFocusCoordinator()
     @StateObject private var playbackQueue = PlaybackQueueManager()
+    @AppStorage("appVisualTheme") private var visualThemeRaw = AppVisualTheme.eclipse.rawValue
+
+    private var visualTheme: AppVisualTheme {
+        AppVisualTheme(rawValue: visualThemeRaw) ?? AppThemeStorage.loadVisualTheme()
+    }
+
+    private var themeAccentColor: Color {
+        visualTheme.palette?.accent ?? .accentColor
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -40,6 +50,11 @@ struct EclipsePlexClientApp: App {
                         .transition(.opacity)
                 }
             }
+            .preferredColorScheme(.dark)
+            .environment(\.appThemePalette, visualTheme.palette)
+            .environment(\.themeAccent, themeAccentColor)
+            .tint(themeAccentColor)
+            .appThemedShellBackground(visualTheme.palette)
 #if os(iOS) || os(macOS)
             .background {
                 BrowseKeyboardCaptureView(coordinator: focusCoordinator)
@@ -73,3 +88,4 @@ struct EclipsePlexClientApp: App {
 extension Notification.Name {
     static let eclipsePlexOpenBrowseMenu = Notification.Name("eclipsePlexOpenBrowseMenu")
 }
+

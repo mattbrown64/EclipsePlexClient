@@ -8,6 +8,7 @@ import SwiftUI
 /// Single sidebar: sources, then Home + libraries for the selected source (catalog stays in the detail column).
 struct AppSidebarView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.themeAccent) private var themeAccent
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
 #if os(tvOS)
     @FocusState private var tvSidebarFocusedRowID: String?
@@ -44,6 +45,7 @@ struct AppSidebarView: View {
     var onSelectSettings: () -> Void = {}
     var onRetryLibraries: () -> Void = {}
     var isAggregateHomeSelected: Bool = false
+    var menuControlsDisabled: Bool = false
 
     private var isHomeSelected: Bool {
         selectedLibraryID == nil && !isAggregateHomeSelected
@@ -56,6 +58,31 @@ struct AppSidebarView: View {
     /// refreshing only from the explicit triggers below cuts that down to one
     /// allocation per actual data change.
     @State private var sidebarFocusRows: [SidebarFocusRow] = []
+    @AppStorage("favoriteLibraryIDsCSV") private var favoriteLibraryIDsRaw = ""
+
+    private var favoriteLibraryIDs: Set<String> {
+        Set(
+            favoriteLibraryIDsRaw
+                .split(separator: ",")
+                .map { String($0) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private var favoriteLibraries: [PlexLibrary] {
+        libraries.filter { favoriteLibraryIDs.contains($0.id) }
+    }
+
+    private var otherLibraries: [PlexLibrary] {
+        libraries.filter { !favoriteLibraryIDs.contains($0.id) }
+    }
+
+    private var sidebarRevision: String {
+        let libIDs = libraries.map(\.id).joined(separator: ",")
+        let plexIDs = plexServers.map { $0.id.uuidString }.joined(separator: ",")
+        let deviceIDs = deviceServers.map { $0.id.uuidString }.joined(separator: ",")
+        return "\(selectedServerID?.uuidString ?? "nil")|\(selectedLibraryID ?? "nil")|\(libIDs)|\(plexIDs)|\(deviceIDs)"
+    }
 
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -183,17 +210,16 @@ struct AppSidebarView: View {
                         }
                     }
 
-                    ForEach(libraries) { library in
-                        rowButton(
-                            title: library.title,
-                            systemImage: icon(for: library),
-                            subtitle: nil,
-                            focusRowID: FocusRowID.library(library.id),
-                            isSelected: selectedLibraryID == library.id,
-                            isPending: pendingLibraryID == library.id
-                        ) {
-                            onSelectLibrary(library)
+                    if !favoriteLibraries.isEmpty {
+                        Section("Favorites") {
+                            ForEach(favoriteLibraries) { library in
+                                libraryRow(library)
+                            }
                         }
+                    }
+
+                    ForEach(otherLibraries) { library in
+                        libraryRow(library)
                     }
 
                     if selectedServer.usesLivePlexAPI, !selectedServer.isDownloadsServer {
@@ -226,11 +252,7 @@ struct AppSidebarView: View {
         .tvBrowseFocusSection(.sidebar)
 #endif
         .onAppear { syncSidebarFocusRows() }
-        .onChange(of: selectedServerID) { _, _ in syncSidebarFocusRows() }
-        .onChange(of: selectedLibraryID) { _, _ in syncSidebarFocusRows() }
-        .onChange(of: libraries.map(\.id)) { _, _ in syncSidebarFocusRows() }
-        .onChange(of: plexServers.map(\.id)) { _, _ in syncSidebarFocusRows() }
-        .onChange(of: deviceServers.map(\.id)) { _, _ in syncSidebarFocusRows() }
+        .onChange(of: sidebarRevision) { _, _ in syncSidebarFocusRows() }
         .navigationTitle("Browse")
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -240,9 +262,38 @@ struct AppSidebarView: View {
                     onDismissSidebar()
                     dismiss()
                 }
+                .disabled(menuControlsDisabled)
             }
         }
 #endif
+    }
+
+    private func libraryRow(_ library: PlexLibrary) -> some View {
+        rowButton(
+            title: library.title,
+            systemImage: icon(for: library),
+            subtitle: nil,
+            focusRowID: FocusRowID.library(library.id),
+            isSelected: selectedLibraryID == library.id,
+            isPending: pendingLibraryID == library.id
+        ) {
+            onSelectLibrary(library)
+        }
+        .contextMenu {
+            Button(favoriteLibraryIDs.contains(library.id) ? "Remove Favorite" : "Add Favorite") {
+                toggleFavorite(library.id)
+            }
+        }
+    }
+
+    private func toggleFavorite(_ libraryID: String) {
+        var favorites = favoriteLibraryIDs
+        if favorites.contains(libraryID) {
+            favorites.remove(libraryID)
+        } else {
+            favorites.insert(libraryID)
+        }
+        favoriteLibraryIDsRaw = favorites.sorted().joined(separator: ",")
     }
 
     private func syncSidebarFocusRows() {
@@ -299,12 +350,12 @@ struct AppSidebarView: View {
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.2), in: Capsule())
+                        .background(themeAccent.opacity(0.2), in: Capsule())
                 }
                 if selectedServerID == server.id {
                     Image(systemName: "checkmark")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(themeAccent)
                 }
             }
         }
@@ -366,7 +417,7 @@ struct AppSidebarView: View {
                 } else if isSelected {
                     Image(systemName: "checkmark")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(themeAccent)
                 }
             }
         }

@@ -208,6 +208,9 @@ final class PlexServerRegistry: ObservableObject {
             librariesByServerID[server.id] = libs
             recordLibraryRefresh(for: server.id)
         } catch let firstError {
+            if Self.isBenignCancellation(firstError) || Task.isCancelled {
+                return
+            }
             if let repaired = await refreshDiscoveredServerConnection(serverId: server.id) {
                 do {
                     let client = try PlexMediaServerClient(server: repaired)
@@ -218,6 +221,9 @@ final class PlexServerRegistry: ObservableObject {
                     librariesLoadErrorServerID = nil
                     return
                 } catch {
+                    if Self.isBenignCancellation(error) || Task.isCancelled {
+                        return
+                    }
                     librariesByServerID[server.id] = nil
                     librariesLoadError = error.localizedDescription
                     librariesLoadErrorServerID = server.id
@@ -228,6 +234,15 @@ final class PlexServerRegistry: ObservableObject {
             librariesLoadError = firstError.localizedDescription
             librariesLoadErrorServerID = server.id
         }
+    }
+
+    /// Task cancellation is expected when navigation or a newer refresh supersedes an in-flight load.
+    private static func isBenignCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if (error as NSError).domain == NSURLErrorDomain, (error as NSError).code == NSURLErrorCancelled {
+            return true
+        }
+        return false
     }
 
     /// Refreshes multiple servers' library lists in parallel with bounded

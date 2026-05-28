@@ -177,7 +177,10 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
         case .movie(let m): return m.year.map { String($0) }
         case .show(let s): return s.year.map { String($0) } ?? "TV Show"
         case .season(let s): return "\(s.showTitle) · Season \(s.seasonNumber)"
-        case .episode(let e): return "S\(e.seasonNumber) E\(e.episodeNumber)"
+        case .episode(let e):
+            let seasonEpisode = "S\(e.seasonNumber) E\(e.episodeNumber)"
+            if e.showTitle.isEmpty { return seasonEpisode }
+            return "\(e.showTitle) · \(seasonEpisode)"
         case .musicTrack(let t):
             let parts = [t.artist, t.album].compactMap { $0 }
             return parts.isEmpty ? "Music" : parts.joined(separator: " · ")
@@ -248,6 +251,13 @@ nonisolated enum PlexCatalogNode: Identifiable, Hashable, Sendable {
 
     var supportsVideoPlayback: Bool {
         playbackRatingKey != nil
+    }
+
+    var galleryAccessibilityLabel: String {
+        if let subtitle = listSubtitle {
+            return "\(listTitle), \(subtitle)"
+        }
+        return listTitle
     }
 
     func matchesSearch(trimmedQuery: String) -> Bool {

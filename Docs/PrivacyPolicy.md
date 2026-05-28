@@ -31,7 +31,7 @@ We do not sell personal data. Crash reports are sent only if you configure a cra
 
 ## Contact
 
-Replace this section with your support email or URL before App Store submission.
+Questions and support: [GitHub Issues](https://github.com/mattbrown64/EclipsePlexClient/issues)
 
 ## Changes
 

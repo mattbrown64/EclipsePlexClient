@@ -40,6 +40,7 @@ private struct BrowseFocusHighlightModifier: ViewModifier {
     let pressed: Bool
     let chrome: BrowseFocusChrome
 
+    @Environment(\.themeAccent) private var themeAccent
     @State private var isHovered = false
 
     private var isEmphasized: Bool {
@@ -73,11 +74,11 @@ private struct BrowseFocusHighlightModifier: ViewModifier {
             .padding(.horizontal, 6)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(fillOpacity))
+                    .fill(themeAccent.opacity(fillOpacity))
             }
             .overlay(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(Color.accentColor)
+                    .fill(themeAccent)
                     .frame(width: isEmphasized ? 4 : 0)
                     .padding(.leading, 2)
             }
@@ -98,17 +99,17 @@ private struct BrowseFocusHighlightModifier: ViewModifier {
             base
                 .background {
                     RoundedRectangle(cornerRadius: BrowseFocusMetrics.posterCornerRadius, style: .continuous)
-                        .fill(Color.accentColor.opacity(fillOpacity))
+                        .fill(themeAccent.opacity(fillOpacity))
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: BrowseFocusMetrics.posterCornerRadius, style: .continuous)
                         .strokeBorder(
-                            Color.accentColor.opacity(pressed ? 1 : 1),
+                            themeAccent.opacity(pressed ? 1 : 1),
                             lineWidth: BrowseFocusMetrics.posterBorderWidth
                         )
                 }
                 .shadow(
-                    color: Color.accentColor.opacity(0.4),
+                    color: themeAccent.opacity(0.4),
                     radius: 12,
                     y: 4
                 )
@@ -130,12 +131,12 @@ private struct BrowseFocusHighlightModifier: ViewModifier {
             base
                 .background {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.accentColor.opacity(fillOpacity))
+                        .fill(themeAccent.opacity(fillOpacity))
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(
-                            Color.accentColor.opacity(borderOpacity),
+                            themeAccent.opacity(borderOpacity),
                             lineWidth: pressed ? 2.5 : 2
                         )
                 }

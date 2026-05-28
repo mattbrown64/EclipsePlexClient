@@ -42,6 +42,9 @@ enum AppDiagnostics {
         let failed = downloadManager.records.filter { $0.state == .failed }
         lines.append("Downloads: \(downloadManager.records.count) total, \(active.count) active, \(failed.count) failed")
         lines.append("Storage used: \(ByteCountFormatter.string(fromByteCount: downloadManager.totalDownloadedBytes, countStyle: .file))")
+        let scrobble = OfflineScrobbleQueue.diagnosticsSummary()
+        let oldest = scrobble.oldestAgeSeconds.map { "\($0)s" } ?? "n/a"
+        lines.append("Offline scrobble queue: \(scrobble.pending) pending, oldest=\(oldest), max attempts=\(scrobble.maxAttempts)")
 
         let recent = CrashReporter.recentErrorsForDiagnostics()
         if !recent.isEmpty {

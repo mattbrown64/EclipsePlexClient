@@ -110,7 +110,6 @@ struct ServerSearchView: View {
                 MediaDetailView(plexServer: plexServer, library: hit.library, node: hit.node)
             }
         }
-        .browseMenuToolbar()
     }
 
     @MainActor

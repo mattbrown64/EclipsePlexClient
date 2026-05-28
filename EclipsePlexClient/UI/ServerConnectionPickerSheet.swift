@@ -10,6 +10,7 @@ struct ServerConnectionPickerSheet: View {
     let server: PlexServer
     @ObservedObject var registry: PlexServerRegistry
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.themeAccent) private var themeAccent
 
     private var candidates: [String] {
         let stored = server.connectionCandidates
@@ -44,7 +45,7 @@ struct ServerConnectionPickerSheet: View {
                             Spacer()
                             if server.activeHostDescription == url {
                                 Image(systemName: "checkmark")
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(themeAccent)
                             }
                         }
                     }

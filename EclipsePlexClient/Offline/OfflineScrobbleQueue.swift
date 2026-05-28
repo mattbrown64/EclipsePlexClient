@@ -141,6 +141,14 @@ enum OfflineScrobbleQueue {
         await performFlush(servers: servers)
     }
 
+    static func diagnosticsSummary() -> (pending: Int, oldestAgeSeconds: Int?, maxAttempts: Int) {
+        let entries = load()
+        let pending = entries.count
+        let oldestAgeSeconds = entries.map { Int(Date().timeIntervalSince($0.createdAt)) }.max()
+        let maxAttempts = entries.map(\.attempts).max() ?? 0
+        return (pending, oldestAgeSeconds, maxAttempts)
+    }
+
     static func performFlush(servers: [PlexServer]) async {
         let entries = load()
         guard !entries.isEmpty else { return }
@@ -198,6 +206,11 @@ enum OfflineScrobbleQueue {
                 AppLog.offlineDebug("Flushed offline scrobble ratingKey=\(entry.ratingKey)")
                 networkAttempts += 1
             } catch {
+                // Some PMS instances reject /:/progress but still accept timeline updates.
+                if await flushViaTimelineFallback(entry: entry, client: client) {
+                    networkAttempts += 1
+                    continue
+                }
                 networkAttempts += 1
                 let disposition = retryDisposition(for: error, currentAttempts: entry.attempts)
                 switch disposition {
@@ -215,6 +228,24 @@ enum OfflineScrobbleQueue {
             }
         }
         save(remaining)
+    }
+
+    private static func flushViaTimelineFallback(
+        entry: Entry,
+        client: PlexMediaServerClient
+    ) async -> Bool {
+        do {
+            try await client.reportTimeline(
+                ratingKey: entry.ratingKey,
+                state: entry.markPlayed ? "stopped" : "playing",
+                timeMs: entry.positionMs,
+                durationMs: entry.durationMs
+            )
+            AppLog.offlineDebug("Flushed offline scrobble via timeline ratingKey=\(entry.ratingKey)")
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Inspect a flush error and decide whether to drop or reschedule.

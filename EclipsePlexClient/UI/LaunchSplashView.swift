@@ -7,19 +7,26 @@ import SwiftUI
 
 /// Simple launch splash shown while the app is bootstrapping.
 struct LaunchSplashView: View {
+    @Environment(\.appThemePalette) private var themePalette
+    @Environment(\.themeAccent) private var themeAccent
+
     var body: some View {
         ZStack {
-            Color.black
-                .ignoresSafeArea()
+            if let palette = themePalette {
+                let (start, end) = palette.playerGradientPoints
+                LinearGradient(colors: palette.playerGradient, startPoint: start, endPoint: end)
+                    .ignoresSafeArea()
+            } else {
+                Color.black
+                    .ignoresSafeArea()
+            }
 
             VStack(spacing: 20) {
-                // Use the in-app logo asset; visually aligns with the app icon
-                // and avoids coupling to the app icon asset catalog.
                 EclipsePlexLogo(style: .hero)
 
                 ProgressView("Loading…")
                     .progressViewStyle(.circular)
-                    .tint(.white)
+                    .tint(themeAccent)
             }
             .padding()
         }

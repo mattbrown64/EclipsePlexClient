@@ -668,6 +668,23 @@ nonisolated struct PlexMediaServerClient: Sendable {
         }
     }
 
+    /// Plex command endpoints can return an empty 200 response body.
+    /// Treat any 2xx as success and skip JSON decoding.
+    func performScrobbleCommand(path: String, query: [URLQueryItem], method: String = "GET") async throws {
+        let state = AppSignposts.signposter.beginInterval("plex.command", "\(path, privacy: .public)")
+        defer { AppSignposts.signposter.endInterval("plex.command", state) }
+        var req = try makeRequest(path: path, query: query)
+        req.httpMethod = method
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw PlexAPIError.decodingFailed("Invalid response.")
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            let snippet = String(data: data, encoding: .utf8).map { String($0.prefix(280)) }
+            throw PlexAPIError.httpStatus(code: http.statusCode, bodySnippet: snippet)
+        }
+    }
+
     func makeRequest(path: String, query: [URLQueryItem]) throws -> URLRequest {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         // Plex command routes (`/:/progress`, `/:/scrobble`) must keep the leading slash;

@@ -4,7 +4,7 @@ platform :ios, '26.0'
 
 target 'EclipsePlexClient' do
   use_frameworks!
-  pod 'MobileVLCKit', '~> 3.6.0'
+  pod 'MobileVLCKit', '~> 3.7.0'
 
   target 'EclipsePlexClientTests' do
     inherit! :search_paths
@@ -131,7 +131,7 @@ def remove_pods_umbrella_framework(installer)
   installer.aggregate_targets.each do |aggregate_target|
     user_project = aggregate_target.user_project
     user_project.native_targets.each do |target|
-      next unless target.name == 'EclipsePlexClient'
+      next unless %w[EclipsePlexClient EclipsePlexClientTests EclipsePlexClientUITests].include?(target.name)
 
       target.frameworks_build_phase.files.to_a.each do |build_file|
         name = build_file.file_ref&.path || build_file.display_name || ''

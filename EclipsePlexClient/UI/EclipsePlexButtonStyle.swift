@@ -69,6 +69,7 @@ struct PressableBorderedButtonStyle: ButtonStyle {
 /// Prominent call-to-action buttons with a clear pressed state.
 struct PressableBorderedProminentButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.themeAccent) private var themeAccent
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -78,7 +79,7 @@ struct PressableBorderedProminentButtonStyle: ButtonStyle {
             .foregroundStyle(Color.white)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(configuration.isPressed ? 0.72 : 1))
+                    .fill(themeAccent.opacity(configuration.isPressed ? 0.72 : 1))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
