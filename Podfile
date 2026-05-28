@@ -89,8 +89,22 @@ post_install do |installer|
   end
 
   installer.aggregate_targets.each do |aggregate_target|
+    next if aggregate_target.name.include?('Tests')
+
     aggregate_target.xcconfigs.each do |config_name, _|
       scope_xcconfig_to_ios(aggregate_target.xcconfig_path(config_name))
+    end
+  end
+end
+
+def strip_vlckit_links_from_test_pod_xcconfigs(installer)
+  %w[Pods-EclipsePlexClientTests Pods-EclipsePlexClientUITests].each do |name|
+    dir = installer.sandbox.root + "Target Support Files/#{name}"
+    next unless Dir.exist?(dir)
+
+    Dir.glob(dir + '*.xcconfig').each do |path|
+      lines = File.read(path).lines.reject { |line| line.start_with?('OTHER_LDFLAGS') }
+      File.write(path, lines.join)
     end
   end
 end
@@ -100,6 +114,7 @@ post_integrate do |installer|
   limit_pods_scripts_to_ios(installer)
   inject_ios_vlckit_search_paths(installer)
   add_mobilevlckit_prepare_phase(installer)
+  strip_vlckit_links_from_test_pod_xcconfigs(installer)
 end
 
 def add_mobilevlckit_prepare_phase(installer)
