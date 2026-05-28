@@ -1,8 +1,8 @@
-//
 //  PlexMetadataMatchCandidateSearchTests.swift
 //  EclipsePlexClientTests
 //
 
+import Foundation
 import Testing
 @testable import EclipsePlexClient
 

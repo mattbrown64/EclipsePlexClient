@@ -69,11 +69,14 @@ jobs:
       - name: Fetch macOS VLCKit
         run: ./scripts/fetch-vlckit-macos.sh
 
+      - name: Resolve iOS Simulator
+        run: echo "IOS_SIMULATOR_DESTINATION=$(./scripts/ci-ios-simulator-destination.sh)" >> "$GITHUB_ENV"
+
       - name: Unit tests (iPhone Simulator)
         run: |
           xcodebuild -workspace EclipsePlexClient.xcworkspace \
             -scheme EclipsePlexClient \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "$IOS_SIMULATOR_DESTINATION" \
             -only-testing:EclipsePlexClientTests \
             DEVELOPMENT_TEAM= \
             CODE_SIGN_STYLE=Manual \
@@ -99,11 +102,14 @@ jobs:
       - name: Fetch macOS VLCKit
         run: ./scripts/fetch-vlckit-macos.sh
 
+      - name: Resolve iOS Simulator
+        run: echo "IOS_SIMULATOR_DESTINATION=$(./scripts/ci-ios-simulator-destination.sh)" >> "$GITHUB_ENV"
+
       - name: UI tests (iPhone Simulator)
         run: |
           xcodebuild -workspace EclipsePlexClient.xcworkspace \
             -scheme EclipsePlexClient \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "$IOS_SIMULATOR_DESTINATION" \
             -only-testing:EclipsePlexClientUITests/BrowseNavigationUITests \
             DEVELOPMENT_TEAM= \
             CODE_SIGN_STYLE=Manual \

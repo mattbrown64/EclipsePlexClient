@@ -1,8 +1,8 @@
-//
 //  PlexPlaybackXMLParserExtendedTests.swift
 //  EclipsePlexClientTests
 //
 
+import Foundation
 import CoreFoundation
 import Testing
 @testable import EclipsePlexClient

@@ -39,6 +39,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
         coordinator.teardown(savePosition: true)
     }
 
+    @MainActor
     final class Coordinator: NSObject, VLCMediaPlayerDelegate {
         private var playback: ResolvedPlayback
         private var activeStreamSignature: String?
@@ -78,8 +79,11 @@ struct MacVLCPlayerView: NSViewRepresentable {
             self.onNaturalEnd = onNaturalEnd
         }
 
-        deinit {
-            teardown(savePosition: true)
+        nonisolated deinit {
+            guard Thread.isMainThread else { return }
+            MainActor.assumeIsolated {
+                teardown(savePosition: true)
+            }
         }
 
         func attach(to view: VLCVideoView) {
