@@ -12,6 +12,7 @@ import AppKit
 #endif
 
 enum AppDiagnostics {
+    @MainActor
     static func exportText(
         registry: PlexServerRegistry,
         downloadManager: OfflineDownloadManager

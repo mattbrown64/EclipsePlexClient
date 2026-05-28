@@ -111,14 +111,22 @@ extension ButtonStyle where Self == BrowsePressableButtonStyle {
     }
 }
 
+enum PlatformControlSize {
+    case small, regular, large
+}
+
 extension View {
     /// `controlSize` is unavailable on tvOS; no-op there.
     @ViewBuilder
-    func platformControlSize(_ size: ControlSize) -> some View {
+    func platformControlSize(_ size: PlatformControlSize) -> some View {
 #if os(tvOS)
         self
 #else
-        controlSize(size)
+        switch size {
+        case .small: controlSize(.small)
+        case .regular: controlSize(.regular)
+        case .large: controlSize(.large)
+        }
 #endif
     }
 }
