@@ -307,6 +307,7 @@ nonisolated enum CatalogWatchFilter: String, CaseIterable, Identifiable, Sendabl
     case all
     case unwatched
     case watched
+    case inProgress
 
     var id: String { rawValue }
 
@@ -315,6 +316,7 @@ nonisolated enum CatalogWatchFilter: String, CaseIterable, Identifiable, Sendabl
         case .all: "All items"
         case .unwatched: "Unwatched"
         case .watched: "Watched"
+        case .inProgress: "In progress"
         }
     }
 
@@ -323,18 +325,23 @@ nonisolated enum CatalogWatchFilter: String, CaseIterable, Identifiable, Sendabl
         case .all: "All"
         case .unwatched: "Unwatched"
         case .watched: "Watched"
+        case .inProgress: "In progress"
         }
     }
 
     var plexQueryItems: [URLQueryItem] {
         switch self {
-        case .all, .watched: return []
+        case .all, .watched, .inProgress: return []
         case .unwatched: return [URLQueryItem(name: "unwatched", value: "1")]
         }
     }
 
     var filtersClientSideByViewCount: Bool {
         self == .watched
+    }
+
+    var filtersClientSideInProgress: Bool {
+        self == .inProgress
     }
 }
 

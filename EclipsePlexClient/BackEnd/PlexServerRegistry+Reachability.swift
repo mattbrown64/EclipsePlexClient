@@ -11,8 +11,15 @@ extension PlexServerRegistry {
     /// Bounded parallel fan-out so app launch isn't gated on the slowest server,
     /// with a short TTL so navigating between tabs doesn't re-probe constantly.
     /// Pass `force = true` from pull-to-refresh / network change handlers.
+    /// Refreshes reachability and library lists for every saved server.
+    func refreshAllLibraries(force: Bool = false) async {
+        await refreshAllReachability(force: force)
+        let servers = customServers.map { $0.withTokenFromKeychain() }.filter { !$0.isDownloadsServer }
+        await refreshLibraries(for: servers, force: force)
+    }
+
     func refreshAllReachability(force: Bool = false) async {
-        let servers = customServers.filter(\.usesLivePlexAPI)
+        let servers = customServers.map { $0.withTokenFromKeychain() }.filter(\.usesLivePlexAPI)
         guard !servers.isEmpty else { return }
         let maxConcurrency = 4
 
@@ -30,14 +37,14 @@ extension PlexServerRegistry {
     }
 
     func refreshReachability(for server: PlexServer, force: Bool = false) async {
-        guard server.usesLivePlexAPI else {
+        let active = server.withTokenFromKeychain().withActiveConnection()
+        guard active.usesLivePlexAPI else {
             setServerReachable(nil, for: server.id)
             return
         }
         if !force, reachabilityCacheIsFresh(for: server.id) {
             return
         }
-        let active = server.withActiveConnection()
         do {
             let client = try PlexMediaServerClient(server: active)
             try await client.verifyReachable()

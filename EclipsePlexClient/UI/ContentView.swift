@@ -25,7 +25,7 @@ struct ContentView: View {
     private var playbackLoadTaskKey: String {
         guard let req = activeRequest ?? request else { return "none" }
         switch req {
-        case .plex(let server, let ratingKey, _, _):
+        case .plex(let server, let ratingKey, _, _, _, _):
             return "plex|\(server.id.uuidString)|\(ratingKey)"
         case .downloadedPlexItem(let server, let ratingKey, _):
             return "offline|\(server.id.uuidString)|\(ratingKey)"
@@ -90,6 +90,7 @@ struct ContentView: View {
 #endif
 #if os(macOS)
         .toolbar(.hidden)
+        .playbackSuppressesMacWindowTitle(!isCompactSession)
 #endif
         .task(id: playbackLoadTaskKey) {
             guard playbackLoadTaskKey != "none" else { return }
@@ -116,6 +117,18 @@ struct ContentView: View {
             }
             Button("Exit", action: { playbackPresenter.stop() })
                 .buttonStyle(.pressableBordered)
+            if let req = activeRequest ?? request,
+               case .plex(let server, _, _, _, _, _) = req,
+               server.connectionCandidates.count > 1 {
+                Button("Try another connection") {
+                    NotificationCenter.default.post(
+                        name: .eclipsePlexOpenConnectionPicker,
+                        object: nil,
+                        userInfo: ["serverId": server.id]
+                    )
+                }
+                .buttonStyle(.pressableBordered)
+            }
         }
     }
 
@@ -160,13 +173,20 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             AppLog.playback("ContentView playback failed: \(error.localizedDescription)")
             loadError = PlaybackErrorMessages.friendly(error.localizedDescription)
+            if case .plex(let server, _, _, _, _, _) = req, server.connectionCandidates.count > 1 {
+                NotificationCenter.default.post(
+                    name: .eclipsePlexOpenConnectionPicker,
+                    object: nil,
+                    userInfo: ["serverId": server.id]
+                )
+            }
         }
     }
 
     private func matchesRequest(_ request: PlaybackRequest, _ playback: ResolvedPlayback) -> Bool {
         guard let ctx = playback.resumeContext else { return false }
         switch request {
-        case .plex(let server, let ratingKey, _, _):
+        case .plex(let server, let ratingKey, _, _, _, _):
             return ctx.serverId == server.id && ctx.ratingKey == ratingKey
         case .downloadedPlexItem(let server, let ratingKey, _):
             return ctx.serverId == server.id && ctx.ratingKey == ratingKey
@@ -191,6 +211,10 @@ private struct VideoPlaybackView: View {
     @EnvironmentObject private var plexRegistry: PlexServerRegistry
     @EnvironmentObject private var playbackPresenter: PlaybackPresenter
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
+    @EnvironmentObject private var playbackQueue: PlaybackQueueManager
+    @EnvironmentObject private var sleepTimer: SleepTimerController
+    @State private var showResumeBanner = false
+    @State private var skippedMarkerIDs: Set<String> = []
     @Environment(\.appThemePalette) private var themePalette
     @Environment(\.themeAccent) private var themeAccent
     @State private var nextEpisodeCandidate: PlexEpisodeSummary?
@@ -203,7 +227,7 @@ private struct VideoPlaybackView: View {
     @State private var playNextCountdownTask: Task<Void, Never>?
 
     private var playNextTaskKey: String {
-        guard case .plex(let server, let ratingKey, _, _) = request else { return "none" }
+        guard case .plex(let server, let ratingKey, _, _, _, _) = request else { return "none" }
         return "\(server.id.uuidString)|\(ratingKey)"
     }
 
@@ -289,6 +313,13 @@ private struct VideoPlaybackView: View {
             if !playback.playbackMarkers.isEmpty {
                 playbackMarkers = playback.playbackMarkers
             }
+            if let resumeMs = playback.resumePositionMs, resumeMs > 5_000 {
+                showResumeBanner = true
+                Task {
+                    try? await Task.sleep(for: .seconds(8))
+                    showResumeBanner = false
+                }
+            }
             chrome.bumpActivity()
             if blocksAutoHide {
                 chrome.setPinned(true)
@@ -304,6 +335,15 @@ private struct VideoPlaybackView: View {
             }
             notePlaybackPositionAdvance(position)
             publishTransportState(positionMs: position, durationMs: vlcController.durationMs)
+            autoSkipIntroIfNeeded(at: position)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexToggleFullScreen)) { _ in
+            vlcController.toggleWindowFullScreen()
+        }
+        .onChange(of: sleepTimer.remainingSeconds) { _, remaining in
+            if remaining == 0, sleepTimer.mode != .none {
+                vlcController.pause()
+            }
         }
         .onChange(of: vlcController.isPlaying) { _, playing in
             publishTransportState(positionMs: vlcController.positionMs, durationMs: vlcController.durationMs, isPlaying: playing)
@@ -582,7 +622,8 @@ private struct VideoPlaybackView: View {
                 },
                 onScrubbingChanged: { chrome.setPinned($0) },
                 onInteraction: { chrome.bumpActivity() },
-                onSettingsEngage: engageSettingsChrome
+                onSettingsEngage: engageSettingsChrome,
+                sleepTimer: sleepTimer
             )
         #elseif os(iOS) || os(tvOS)
         IOSVLCPlaybackControls(
@@ -619,6 +660,19 @@ private struct VideoPlaybackView: View {
 
     @ViewBuilder
     private var blockingOverlays: some View {
+        if showResumeBanner, let resumeMs = playback.resumePositionMs, resumeMs > 0 {
+            HStack(spacing: 12) {
+                Text("Resuming from \(MacVLCPlaybackController.format(ms: resumeMs))")
+                    .font(.callout)
+                Button("Start over") {
+                    seekToMs(0)
+                    showResumeBanner = false
+                }
+                .buttonStyle(.pressableBordered)
+            }
+            .padding()
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        }
         if isReloadingStream {
             ProgressView("Updating stream…")
                 .padding()
@@ -759,6 +813,18 @@ private struct VideoPlaybackView: View {
     @MainActor
     private func handleNaturalEnd() async {
         await reportWatchStateToPlex()
+        if sleepTimer.shouldStopAfterEpisode {
+            sleepTimer.cancel()
+            exitPlayback()
+            return
+        }
+        if let item = playbackQueue.advance(),
+           let server = plexRegistry.allServers.first(where: { $0.id == item.serverId }) {
+            cancelPlayNextCountdown()
+            isPlayNextOverlayVisible = false
+            onAdvanceTo(item.playbackRequest(server: server))
+            return
+        }
         await offerPlayNextIfNeeded()
     }
 
@@ -778,6 +844,39 @@ private struct VideoPlaybackView: View {
         guard let pendingSkipAction else { return }
         chrome.bumpActivity()
         seekToMs(pendingSkipAction.endMs)
+        if let showKey = episodeShowRatingKey,
+           !SkipIntroPreferences.alwaysSkip(for: currentServerId, showRatingKey: showKey),
+           !PlaybackPreferences.alwaysSkipIntros {
+            AppToastCenter.show("Enable “Always skip intros” in Settings to auto-skip this show")
+        }
+    }
+
+    private var currentServerId: UUID {
+        guard case .plex(let server, _, _, _, _, _) = request else {
+            return UUID()
+        }
+        return server.id
+    }
+
+    private var episodeShowRatingKey: String? {
+        nextEpisodeContext?.showRatingKey
+    }
+
+    private func autoSkipIntroIfNeeded(at positionMs: Int) {
+        guard PlaybackPreferences.alwaysSkipIntros || perShowSkipEnabled else { return }
+        guard let marker = PlexPlaybackMarkerParser.activeMarker(at: positionMs, in: playbackMarkers),
+              marker.type == .intro,
+              marker.isSkippable(at: positionMs)
+        else { return }
+        let markerID = "\(marker.startMs)-\(marker.endMs)"
+        guard !skippedMarkerIDs.contains(markerID) else { return }
+        skippedMarkerIDs.insert(markerID)
+        seekToMs(marker.endMs)
+    }
+
+    private var perShowSkipEnabled: Bool {
+        guard let showKey = episodeShowRatingKey else { return false }
+        return SkipIntroPreferences.alwaysSkip(for: currentServerId, showRatingKey: showKey)
     }
 
     private func markerButtonTitle(_ marker: PlexPlaybackMarker) -> String {
@@ -805,7 +904,7 @@ private struct VideoPlaybackView: View {
     private func loadPlaybackPresentationInfo() async {
         windowTitle = nil
         chromeEpisodeLine = nil
-        guard case .plex(let server, let ratingKey, let fallbackTitle, let episodeContext) = request else {
+        guard case .plex(let server, let ratingKey, let fallbackTitle, let episodeContext, _, _) = request else {
             playbackMarkers = []
             windowTitle = request?.displayTitle
             chromeEpisodeLine = nil
@@ -896,7 +995,7 @@ private struct VideoPlaybackView: View {
         nextEpisodeCandidate = nil
         previousEpisodeCandidate = nil
         nextEpisodeContext = nil
-        guard case .plex(let server, let ratingKey, _, let explicitContext) = request else { return }
+        guard case .plex(let server, let ratingKey, _, let explicitContext, _, _) = request else { return }
         guard server.usesLivePlexAPI else { return }
 
         guard let (context, library) = await resolvePlayNextContext(
@@ -1048,7 +1147,7 @@ private struct VideoPlaybackView: View {
 
     @MainActor
     private func startPlayNextEpisode(_ episode: PlexEpisodeSummary, context: EpisodePlayContext) {
-        guard case .plex(let server, _, let title, _) = request else { return }
+        guard case .plex(let server, _, let title, _, _, _) = request else { return }
         cancelPlayNextCountdown()
         isPlayNextOverlayVisible = false
         nextEpisodeCandidate = nil
@@ -1336,8 +1435,6 @@ private struct IOSVLCPlaybackControls: View {
             .buttonStyle(.plain)
             .labelStyle(.iconOnly)
         }
-        .padding(.horizontal)
-        .padding(.top, 8)
         .onChange(of: positionMs) { _, position in
             if !isScrubbing {
                 scrubberMs = Double(position)

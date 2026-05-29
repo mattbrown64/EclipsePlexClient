@@ -59,6 +59,9 @@ final class PlexServerRegistry: ObservableObject {
     /// `.task` blocks during normal navigation. Force-refresh bypasses these.
     private var lastReachabilityProbeAt: [UUID: Date] = [:]
     private var lastLibraryRefreshAt: [UUID: Date] = [:]
+    /// In-flight library fetches keyed by server. Not tied to SwiftUI `.task`
+    /// cancellation so a superseded sidebar refresh still completes.
+    private var libraryRefreshTasks: [UUID: Task<Void, Never>] = [:]
     static let reachabilityTTL: TimeInterval = 60
     static let libraryTTL: TimeInterval = 120
 
@@ -182,14 +185,31 @@ final class PlexServerRegistry: ObservableObject {
         saveReachabilityHistory()
     }
 
+    /// Starts a library refresh that survives SwiftUI `.task` cancellation.
+    func scheduleRefreshLibraries(for server: PlexServer, force: Bool = false) {
+        let prepared = server.withTokenFromKeychain()
+        guard prepared.usesLivePlexAPI else {
+            recordLibrariesConfigurationFailure(for: prepared)
+            return
+        }
+        libraryRefreshTasks[prepared.id]?.cancel()
+        libraryRefreshTasks[prepared.id] = Task { @MainActor in
+            await refreshLibraries(for: prepared, force: force)
+            libraryRefreshTasks[prepared.id] = nil
+        }
+    }
+
+    /// Starts parallel library refreshes without inheriting SwiftUI task cancellation.
+    func scheduleRefreshLibraries(for servers: [PlexServer], force: Bool = false) {
+        Task { @MainActor in
+            await refreshLibraries(for: servers, force: force)
+        }
+    }
+
     func refreshLibraries(for server: PlexServer, force: Bool = false) async {
-        let server = server.withTokenFromKeychain()
+        let server = server.withTokenFromKeychain().withActiveConnection()
         guard server.usesLivePlexAPI else {
-            librariesByServerID[server.id] = nil
-            if librariesLoadErrorServerID == server.id {
-                librariesLoadError = nil
-                librariesLoadErrorServerID = nil
-            }
+            recordLibrariesConfigurationFailure(for: server)
             return
         }
         if !force,
@@ -208,12 +228,14 @@ final class PlexServerRegistry: ObservableObject {
             librariesByServerID[server.id] = libs
             recordLibraryRefresh(for: server.id)
         } catch let firstError {
-            if Self.isBenignCancellation(firstError) || Task.isCancelled {
+            let cancelled = Self.isBenignCancellation(firstError) || Task.isCancelled
+            if cancelled, librariesByServerID[server.id]?.isEmpty == false {
                 return
             }
+
             if let repaired = await refreshDiscoveredServerConnection(serverId: server.id) {
                 do {
-                    let client = try PlexMediaServerClient(server: repaired)
+                    let client = try PlexMediaServerClient(server: repaired.withActiveConnection())
                     let libs = try await client.fetchLibraries(serverId: repaired.id)
                     librariesByServerID[repaired.id] = libs
                     recordLibraryRefresh(for: repaired.id)
@@ -221,19 +243,38 @@ final class PlexServerRegistry: ObservableObject {
                     librariesLoadErrorServerID = nil
                     return
                 } catch {
-                    if Self.isBenignCancellation(error) || Task.isCancelled {
+                    let repairCancelled = Self.isBenignCancellation(error) || Task.isCancelled
+                    if repairCancelled, librariesByServerID[server.id]?.isEmpty == false {
                         return
                     }
+                    guard !repairCancelled else { return }
                     librariesByServerID[server.id] = nil
                     librariesLoadError = error.localizedDescription
                     librariesLoadErrorServerID = server.id
                     return
                 }
             }
+
+            guard !cancelled else { return }
             librariesByServerID[server.id] = nil
             librariesLoadError = firstError.localizedDescription
             librariesLoadErrorServerID = server.id
         }
+    }
+
+    func connectionIssue(for server: PlexServer) -> PlexServerConnectionIssue? {
+        PlexServer.connectionIssue(
+            for: server,
+            reachable: serverReachable[server.id],
+            librariesLoadError: librariesLoadError,
+            librariesLoadErrorServerID: librariesLoadErrorServerID
+        )
+    }
+
+    private func recordLibrariesConfigurationFailure(for server: PlexServer) {
+        librariesByServerID[server.id] = nil
+        librariesLoadError = PlexServer.configurationLibrariesError(for: server)
+        librariesLoadErrorServerID = server.id
     }
 
     /// Task cancellation is expected when navigation or a newer refresh supersedes an in-flight load.

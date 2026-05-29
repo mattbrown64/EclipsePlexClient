@@ -38,6 +38,43 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        Group {
+#if os(macOS)
+            ScrollView {
+                settingsForm
+            }
+#else
+            settingsForm
+#endif
+        }
+        .navigationTitle("Settings")
+#if os(iOS)
+        .task {
+            downloadNotificationStatus = await OfflineDownloadNotifications.authorizationStatus()
+        }
+#endif
+        .sheet(isPresented: $showAddServer) {
+            AddPlexServerSheet(registry: registry)
+        }
+        .confirmDestructive(
+            title: "Sign out of Plex.tv?",
+            message: "This clears your Plex.tv token used for PIN sign-in. Saved servers on this device are not removed.",
+            confirmLabel: "Sign Out",
+            isPresented: $showSignOutConfirm
+        ) {
+            registry.setPlexAccountToken(nil)
+        }
+        .confirmDestructive(
+            title: "Clear artwork cache?",
+            message: "Posters will reload from your servers on next browse.",
+            confirmLabel: "Clear",
+            isPresented: $showClearArtworkConfirm
+        ) {
+            PlexArtworkCache.clearAll()
+        }
+    }
+
+    private var settingsForm: some View {
         Form {
             Section("Keyboard & navigation") {
                 NavigationLink {
@@ -72,7 +109,43 @@ struct SettingsView: View {
                     .onChange(of: preferHLS) { _, value in
                         PlaybackPreferences.preferHLSTranscode = value
                     }
+                Toggle("Always resume where I left off", isOn: Binding(
+                    get: { PlaybackPreferences.alwaysResumeWhereLeftOff },
+                    set: { PlaybackPreferences.alwaysResumeWhereLeftOff = $0 }
+                ))
+                Toggle("Always skip intros", isOn: Binding(
+                    get: { PlaybackPreferences.alwaysSkipIntros },
+                    set: { PlaybackPreferences.alwaysSkipIntros = $0 }
+                ))
+                TextField("Preferred subtitle language (e.g. en)", text: Binding(
+                    get: { PlaybackPreferences.preferredSubtitleLanguage ?? "" },
+                    set: { PlaybackPreferences.preferredSubtitleLanguage = $0.isEmpty ? nil : $0 }
+                ))
+                TextField("Preferred audio language (e.g. en)", text: Binding(
+                    get: { PlaybackPreferences.preferredAudioLanguage ?? "" },
+                    set: { PlaybackPreferences.preferredAudioLanguage = $0.isEmpty ? nil : $0 }
+                ))
+                Stepper(
+                    "Subtitle size: \(Int(PlaybackPreferences.subtitleFontSize))pt",
+                    value: Binding(
+                        get: { PlaybackPreferences.subtitleFontSize },
+                        set: { PlaybackPreferences.subtitleFontSize = $0 }
+                    ),
+                    in: 10 ... 36
+                )
+                Button("Reset per-show skip preferences") {
+                    SkipIntroPreferences.resetAllShowPreferences()
+                }
             }
+
+#if os(macOS)
+            Section("macOS") {
+                Toggle("Quit when closing window", isOn: Binding(
+                    get: { AppPreferences.quitWhenClosingWindow },
+                    set: { AppPreferences.quitWhenClosingWindow = $0 }
+                ))
+            }
+#endif
 
             Section("Theme") {
                 Picker("Visual theme", selection: visualThemeBinding) {
@@ -149,6 +222,8 @@ struct SettingsView: View {
                 }
             }
 
+            SettingsServersSection(registry: registry)
+
             Section("Plex account") {
                 Button("Add Plex Server…") {
                     showAddServer = true
@@ -158,9 +233,18 @@ struct SettingsView: View {
                         showSignOutConfirm = true
                     }
                 }
+                Text("Plex Home profile switching is documented in Docs/PlexHomeUsers.md. Managed-user tokens are not wired yet; libraries use each server’s main token.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Maintenance") {
+                Button("Refresh all servers") {
+                    Task {
+                        await registry.refreshAllLibraries(force: true)
+                        await AggregateHomeHubService.invalidateAll()
+                    }
+                }
                 Button("Clear artwork cache") {
                     showClearArtworkConfirm = true
                 }
@@ -206,31 +290,10 @@ struct SettingsView: View {
                 LabeledContent("Version", value: AppVersion.displayString)
             }
         }
-        .navigationTitle("Settings")
-#if os(iOS)
-        .task {
-            downloadNotificationStatus = await OfflineDownloadNotifications.authorizationStatus()
-        }
+#if os(macOS)
+        .formStyle(.grouped)
+        .scrollDisabled(true)
 #endif
-        .sheet(isPresented: $showAddServer) {
-            AddPlexServerSheet(registry: registry)
-        }
-        .confirmDestructive(
-            title: "Sign out of Plex.tv?",
-            message: "This clears your Plex.tv token used for PIN sign-in. Saved servers on this device are not removed.",
-            confirmLabel: "Sign Out",
-            isPresented: $showSignOutConfirm
-        ) {
-            registry.setPlexAccountToken(nil)
-        }
-        .confirmDestructive(
-            title: "Clear artwork cache?",
-            message: "Posters will reload from your servers on next browse.",
-            confirmLabel: "Clear",
-            isPresented: $showClearArtworkConfirm
-        ) {
-            PlexArtworkCache.clearAll()
-        }
     }
 
 }

@@ -7,10 +7,17 @@ import Combine
 import Foundation
 
 /// In-session play queue (Up Next) beyond single episode auto-advance.
+enum PlaybackRepeatMode: String, CaseIterable, Sendable {
+    case off
+    case all
+    case one
+}
+
 @MainActor
 final class PlaybackQueueManager: ObservableObject {
     @Published private(set) var items: [PlaybackQueueItem] = []
     @Published private(set) var currentIndex: Int?
+    @Published var repeatMode: PlaybackRepeatMode = .off
 
     var isEmpty: Bool { items.isEmpty }
     var hasNext: Bool {
@@ -45,6 +52,9 @@ final class PlaybackQueueManager: ObservableObject {
     }
 
     func advance() -> PlaybackQueueItem? {
+        if repeatMode == .one, let idx = currentIndex, items.indices.contains(idx) {
+            return items[idx]
+        }
         guard let idx = currentIndex else {
             if !items.isEmpty {
                 currentIndex = 0
@@ -53,14 +63,31 @@ final class PlaybackQueueManager: ObservableObject {
             return nil
         }
         let next = idx + 1
-        guard items.indices.contains(next) else { return nil }
-        currentIndex = next
-        return items[next]
+        if items.indices.contains(next) {
+            currentIndex = next
+            return items[next]
+        }
+        if repeatMode == .all, !items.isEmpty {
+            currentIndex = 0
+            return items[0]
+        }
+        return nil
     }
 
     func clear() {
         items = []
         currentIndex = nil
+    }
+}
+
+extension PlaybackQueueItem {
+    func playbackRequest(server: PlexServer) -> PlaybackRequest {
+        .plex(
+            server: server,
+            ratingKey: ratingKey,
+            title: title,
+            episodeContext: episodeContext
+        )
     }
 }
 

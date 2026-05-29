@@ -10,8 +10,12 @@ import UniformTypeIdentifiers
 struct HomeDetailView: View {
     let plexServer: PlexServer?
     let libraries: [PlexLibrary]
+    var connectionIssue: PlexServerConnectionIssue?
     var onAddPlexServer: () -> Void = {}
+    var onEditServer: () -> Void = {}
+    var onRetryConnection: () -> Void = {}
     var onManageServer: () -> Void = {}
+    var onSignInToPlex: () -> Void = {}
 
     @State private var continueWatching: [PlexCatalogSearchHit] = []
     @State private var recentlyAdded: [PlexCatalogSearchHit] = []
@@ -23,6 +27,7 @@ struct HomeDetailView: View {
     @State private var localPlayback: LocalFilePlayback?
 
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
+    @EnvironmentObject private var plexRegistry: PlexServerRegistry
     @Environment(\.catalogNavigationActions) private var catalogNavigation
 
     var body: some View {
@@ -82,7 +87,9 @@ struct HomeDetailView: View {
         VStack(alignment: .leading, spacing: 24) {
                 headerSection
 
-                if let plexServer, plexServer.usesLivePlexAPI {
+                if let issue = connectionIssue, plexServer != nil {
+                    serverUnavailableCard(issue)
+                } else if let plexServer, plexServer.usesLivePlexAPI {
                     if isLoadingHubs, continueWatching.isEmpty, recentlyAdded.isEmpty {
                         ProgressView("Loading from Plex…")
                             .frame(maxWidth: .infinity)
@@ -126,7 +133,42 @@ struct HomeDetailView: View {
     }
 
     private var hubTaskKey: String {
-        "\(plexServer?.id.uuidString ?? "none")|\(libraries.count)"
+        "\(plexServer?.id.uuidString ?? "none")|\(libraries.count)|\(connectionIssue?.title ?? "ok")"
+    }
+
+    private func serverUnavailableCard(_ issue: PlexServerConnectionIssue) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(issue.title, systemImage: issue.systemImage)
+                .font(.headline)
+                .foregroundStyle(.orange)
+            Text(issue.message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                if issue.offersPlexAccountSignIn {
+                    Button(action: onSignInToPlex) {
+                        Label("Sign in to Plex", systemImage: "person.badge.key")
+                    }
+                    .buttonStyle(.pressableBorderedProminent)
+                }
+                if issue.needsEditServer {
+                    if issue.offersPlexAccountSignIn {
+                        Button("Edit Server", action: onEditServer)
+                            .buttonStyle(.pressableBordered)
+                    } else {
+                        Button("Edit Server", action: onEditServer)
+                            .buttonStyle(.pressableBorderedProminent)
+                    }
+                }
+                if issue.canRetryLibraries {
+                    Button("Retry", action: onRetryConnection)
+                        .buttonStyle(.pressableBordered)
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var headerSection: some View {
@@ -155,6 +197,14 @@ struct HomeDetailView: View {
             .buttonStyle(.pressableBorderedProminent)
 
             if let plexServer, plexServer.usesLivePlexAPI {
+                if plexRegistry.plexAccountAuthToken != nil {
+                    NavigationLink {
+                        WatchlistDetailView(registry: plexRegistry, server: plexServer)
+                    } label: {
+                        Label("Watchlist", systemImage: "star")
+                    }
+                    .buttonStyle(.pressableBordered)
+                }
                 Button {
                     catalogNavigation.pushRoute(.liveTV)
                 } label: {
@@ -180,6 +230,13 @@ struct HomeDetailView: View {
 
     @MainActor
     private func loadHubs() async {
+        if let issue = connectionIssue {
+            continueWatching = []
+            recentlyAdded = []
+            hubsError = issue.message
+            isLoadingHubs = false
+            return
+        }
         guard let plexServer, plexServer.usesLivePlexAPI else {
             continueWatching = []
             recentlyAdded = []

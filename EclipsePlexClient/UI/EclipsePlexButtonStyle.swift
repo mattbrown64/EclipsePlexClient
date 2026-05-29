@@ -129,4 +129,19 @@ extension View {
         }
 #endif
     }
+
+    /// Fixed-size spinner for list rows and banners. Avoids macOS AppKit
+    /// `ProgressView` constraint churn when embedded in animated layouts.
+    @ViewBuilder
+    func fixedProgressIndicator(size: PlatformControlSize = .small) -> some View {
+        let side: CGFloat = switch size {
+        case .small: 14
+        case .regular: 18
+        case .large: 22
+        }
+        ProgressView()
+            .platformControlSize(size)
+            .frame(width: side, height: side)
+            .fixedSize()
+    }
 }

@@ -444,6 +444,20 @@ extension PlexMediaServerClient {
     }
 
     private func applyWatchFilter(_ nodes: [PlexCatalogNode], watchFilter: CatalogWatchFilter) -> [PlexCatalogNode] {
+        if watchFilter.filtersClientSideInProgress {
+            return nodes.filter { node in
+                switch node {
+                case .movie(let m):
+                    let offset = m.viewOffsetMs ?? 0
+                    return offset > 0 && (m.viewCount ?? 0) == 0
+                case .episode(let e):
+                    let offset = e.viewOffsetMs ?? 0
+                    return offset > 0 && (e.viewCount ?? 0) == 0
+                default:
+                    return false
+                }
+            }
+        }
         guard watchFilter.filtersClientSideByViewCount else { return nodes }
         return nodes.filter { node in
             switch node {

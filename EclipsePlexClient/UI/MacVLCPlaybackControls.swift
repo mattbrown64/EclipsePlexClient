@@ -18,6 +18,7 @@ struct MacVLCPlaybackControls: View {
     var onScrubbingChanged: (Bool) -> Void = { _ in }
     var onInteraction: () -> Void = {}
     var onSettingsEngage: () -> Void = {}
+    var sleepTimer: SleepTimerController? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,8 +29,6 @@ struct MacVLCPlaybackControls: View {
             )
             transportRow
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
 
     private var transportRow: some View {
@@ -77,6 +76,26 @@ struct MacVLCPlaybackControls: View {
                     Image(systemName: "forward.end.fill")
                 }
                 .help("Next episode · S\(next.seasonNumber)E\(next.episodeNumber)")
+            }
+
+            Button {
+                onInteraction()
+                controller.toggleWindowFullScreen()
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .help("Enter full screen")
+
+            if let sleepTimer {
+                Menu {
+                    Button("Off") { sleepTimer.cancel() }
+                    Button("15 minutes") { sleepTimer.start(minutes: 15) }
+                    Button("30 minutes") { sleepTimer.start(minutes: 30) }
+                    Button("End of episode") { sleepTimer.startAfterEpisode() }
+                } label: {
+                    Image(systemName: "moon.zzz")
+                }
+                .help("Sleep timer")
             }
 
             embeddedSubtitleMenu

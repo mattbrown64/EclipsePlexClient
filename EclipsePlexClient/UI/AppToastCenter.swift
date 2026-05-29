@@ -43,9 +43,14 @@ final class AppToastCenter: ObservableObject {
 
 private struct AppToastBanner: View {
     @ObservedObject var center: AppToastCenter
+    @EnvironmentObject private var playbackPresenter: PlaybackPresenter
+
+    private var suppressForFullscreenPlayback: Bool {
+        playbackPresenter.hasActiveSession && playbackPresenter.presentationMode == .fullScreen
+    }
 
     var body: some View {
-        if let message = center.message {
+        if let message = center.message, !suppressForFullscreenPlayback {
             Text(message)
                 .font(.subheadline)
                 .multilineTextAlignment(.center)

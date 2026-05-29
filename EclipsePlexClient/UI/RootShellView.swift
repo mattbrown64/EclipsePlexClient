@@ -42,6 +42,8 @@ struct RootShellView: View {
     @State private var libraryTransitionError: String?
     @State private var detailLoadingTimeoutTask: Task<Void, Never>?
     @State private var detailLoadingCompleteTask: Task<Void, Never>?
+    /// Coalesces library-list / selection mutations off the current render pass.
+    @State private var librarySidebarSyncGeneration: UInt = 0
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -84,7 +86,13 @@ struct RootShellView: View {
             return plexRegistry.librariesByServerID[server.id] ?? []
         }
         #if DEBUG
-        return PlexSampleData.libraries(for: server.id)
+        // Only built-in fixture servers use offline sample sections. User-added
+        // servers without a token/URL should show an empty list (and load error),
+        // not fake "Movies / TV Shows / Music" that look like a real library list.
+        if PlexSampleData.servers.contains(where: { $0.id == server.id }) {
+            return PlexSampleData.libraries(for: server.id)
+        }
+        return []
         #else
         return []
         #endif
@@ -130,8 +138,13 @@ struct RootShellView: View {
         )
     }
 
+    private var suppressBrowseShellForPlayback: Bool {
+        playbackPresenter.hasActiveSession && playbackPresenter.presentationMode == .fullScreen
+    }
+
     var body: some View {
         rootShell
+            .browseShellSuppressedForPlayback(suppressBrowseShellForPlayback)
             .environmentObject(plexRegistry)
             .attachPlaybackPresenter(
                 playbackPresenter,
@@ -150,12 +163,19 @@ struct RootShellView: View {
             .onChange(of: showSettings) { _, showing in
                 focusCoordinator.browseKeyboardCommandsEnabled = !showing
             }
+#if os(macOS)
+            .onChange(of: suppressBrowseShellForPlayback) { _, suppressed in
+                PlaybackWindowTitleController.shared.setSuppressed(suppressed)
+            }
+#endif
             .onChange(of: scenePhase) { _, phase in
-                guard playbackPresenter.hasActiveSession else { return }
-                if phase == .background || phase == .inactive {
+                if phase == .background || phase == .inactive, playbackPresenter.hasActiveSession {
                     PlaybackNowPlayingController.shared.activateAudioSessionIfNeeded()
                 }
                 if phase == .active {
+                    Task {
+                        await plexRegistry.refreshAllReachability()
+                    }
                     OfflineScrobbleQueue.scheduleFlush(servers: plexRegistry.allServers)
                     Task {
                         await downloadManager.pumpQueueIfAllowed()
@@ -167,10 +187,10 @@ struct RootShellView: View {
             }
             .onChange(of: selectedLibraryIdString) { _, _ in
                 scheduleDetailFocusAdoption()
-                completeLibraryNavigationIfReady()
+                scheduleLibraryNavigationCompletion()
             }
             .onChange(of: libraryNavigationReadyKey) { _, _ in
-                completeLibraryNavigationIfReady()
+                scheduleLibraryNavigationCompletion()
             }
             .onChange(of: selectedServerIdString) { _, _ in
                 scheduleDetailFocusAdoption()
@@ -180,15 +200,16 @@ struct RootShellView: View {
             }
             .environment(\.openBrowseMenu, OpenBrowseMenuAction(open: presentBrowseMenu))
             .environment(\.dismissBrowseMenu, DismissBrowseMenuAction(dismiss: dismissBrowseMenu))
-            .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexOpenBrowseMenu)) { _ in
-                presentBrowseMenu()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexOpenSearch)) { _ in
-                presentServerSearch()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .eclipsePlexRefreshLibraries)) { _ in
-                Task { await refreshSelectedServerLibraries() }
-            }
+            .modifier(
+                RootShellNotificationHandlers(
+                    plexRegistry: plexRegistry,
+                    plexServers: plexServers,
+                    connectionPickerServer: $connectionPickerServer,
+                    refreshSelectedServerLibraries: refreshSelectedServerLibraries,
+                    presentBrowseMenu: presentBrowseMenu,
+                    presentServerSearch: presentServerSearch
+                )
+            )
             .environment(
                 \.openServerSearch,
                 OpenServerSearchAction(open: presentServerSearch)
@@ -230,6 +251,9 @@ struct RootShellView: View {
                     SettingsView(registry: plexRegistry)
                         .offlineDownloads(downloadManager)
                 }
+#if os(macOS)
+                .frame(minWidth: 520, idealWidth: 560, minHeight: 420, idealHeight: 640)
+#endif
             }
             .sheet(isPresented: $showServerSearch) {
                 if let server = selectedPlexServer, server.usesLivePlexAPI {
@@ -240,25 +264,30 @@ struct RootShellView: View {
                 }
             }
             .onAppear {
+#if os(macOS)
+                MacAppDelegate.registry = plexRegistry
+#endif
                 downloadManager.configure(registry: plexRegistry)
                 focusCoordinator.browseKeyboardCommandsEnabled = !showSettings
                 applyUITestLaunchPresentationIfNeeded()
                 // Empty selection = aggregate Home (all servers). Keep stored server id on upgrade.
-                invalidateLibrarySelectionIfNeeded()
+                scheduleLibrarySidebarSync()
                 adoptDetailKeyboardFocusIfNeeded()
                 offerAddServerIfNeeded()
             }
             .task(id: selectedServerIdString) {
                 if let server = selectedPlexServer, !server.isDownloadsServer {
-                    await plexRegistry.refreshLibraries(for: server)
+                    plexRegistry.scheduleRefreshLibraries(for: server)
                 } else if selectedServerID == nil {
-                    await refreshLibrariesForAllPlexServers()
+                    plexRegistry.scheduleRefreshLibraries(for: plexServers)
                 }
-                invalidateLibrarySelectionIfNeeded()
-                applyPendingLibrarySelectionIfNeeded()
+                scheduleLibrarySidebarSync()
             }
             .onChange(of: plexRegistry.librariesByServerID) { _, _ in
-                applyPendingLibrarySelectionIfNeeded()
+                scheduleLibrarySidebarSync()
+            }
+            .onChange(of: plexRegistry.librariesLoadingServerID) { _, _ in
+                scheduleLibrarySidebarSync()
             }
     }
 
@@ -393,6 +422,7 @@ struct RootShellView: View {
         }
 #if os(macOS)
         .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 360)
+        .detailColumnMacWindowTitlePolicy(suppressed: suppressBrowseShellForPlayback)
 #endif
     }
 
@@ -410,8 +440,7 @@ struct RootShellView: View {
             selectedLibraryID: selectedLibraryIDBinding,
             pendingLibraryID: pendingLibraryID,
             isLoadingLibraries: plexRegistry.librariesLoadingServerID == selectedPlexServer?.id,
-            librariesLoadError: plexRegistry.librariesLoadError,
-            showsLibrariesError: plexRegistry.librariesLoadErrorServerID == selectedPlexServer?.id,
+            connectionIssueForServer: { plexRegistry.connectionIssue(for: $0) },
             isUserAddedServer: { plexRegistry.isUserAddedServer(id: $0) },
             serverReachable: { plexRegistry.serverReachable[$0] },
             serverLastOnlineAt: { plexRegistry.lastOnlineAt(for: $0) },
@@ -439,8 +468,9 @@ struct RootShellView: View {
             },
             onRetryLibraries: {
                 guard let server = selectedPlexServer else { return }
-                Task { await plexRegistry.refreshLibraries(for: server) }
+                plexRegistry.scheduleRefreshLibraries(for: server, force: true)
             },
+            onSignInToPlex: { showAddPlexServer = true },
             isAggregateHomeSelected: selectedServerID == nil,
             menuControlsDisabled: playbackPresenter.hasActiveSession
         )
@@ -472,8 +502,15 @@ struct RootShellView: View {
                         HomeDetailView(
                             plexServer: server,
                             libraries: librariesForSelectedServer,
+                            connectionIssue: plexRegistry.connectionIssue(for: server),
                             onAddPlexServer: { showAddPlexServer = true },
-                            onManageServer: { serverManagementServer = server }
+                            onEditServer: { serverToEdit = server },
+                            onRetryConnection: {
+                                plexRegistry.scheduleRefreshLibraries(for: server, force: true)
+                                Task { await plexRegistry.refreshReachability(for: server, force: true) }
+                            },
+                            onManageServer: { serverManagementServer = server },
+                            onSignInToPlex: { showAddPlexServer = true }
                         )
                         .onAppear { adoptDetailKeyboardFocusIfNeeded() }
                     } else {
@@ -492,6 +529,9 @@ struct RootShellView: View {
             }
             .offlineDownloads(downloadManager)
             .toolbar { detailToolbar }
+#if os(macOS)
+            .detailColumnMacWindowTitlePolicy(suppressed: suppressBrowseShellForPlayback)
+#endif
 
             if let message = detailLoadingMessage {
                 detailLoadingBanner(message: message)
@@ -502,7 +542,7 @@ struct RootShellView: View {
     private func detailLoadingBanner(message: String) -> some View {
         VStack {
             HStack(spacing: 10) {
-                ProgressView()
+                fixedProgressIndicator(size: .regular)
                 Text(message)
                     .font(.subheadline)
             }
@@ -520,8 +560,7 @@ struct RootShellView: View {
 
     private func libraryLoadingDetail(title: String) -> some View {
         VStack(spacing: 14) {
-            ProgressView()
-                .platformControlSize(.large)
+            fixedProgressIndicator(size: .large)
             Text("Loading \(title)…")
                 .font(.headline)
             Text("Preparing library content")
@@ -550,12 +589,7 @@ struct RootShellView: View {
         beginDetailLoading(message: "Loading \(target.title)…", persistUntilCleared: true)
         scheduleDetailLoadingTimeout()
         if let server = selectedPlexServer, !server.isDownloadsServer {
-            Task {
-                await plexRegistry.refreshLibraries(for: server)
-                await MainActor.run {
-                    completeLibraryNavigationIfReady()
-                }
-            }
+            plexRegistry.scheduleRefreshLibraries(for: server, force: true)
         } else {
             DispatchQueue.main.async {
                 completeLibraryNavigationIfReady()
@@ -583,22 +617,19 @@ struct RootShellView: View {
         focusCoordinator.focusHome()
         dismissBrowseMenu()
         showDetailLoading(message: "Loading all servers…")
-        Task { await refreshLibrariesForAllPlexServers() }
-    }
-
-    private func refreshLibrariesForAllPlexServers() async {
-        await plexRegistry.refreshLibraries(for: plexServers)
+        plexRegistry.scheduleRefreshLibraries(for: plexServers)
     }
 
     private func selectServer(_ id: UUID) {
         guard selectedServerID != id else { return }
         libraryTransitionTarget = nil
         libraryTransitionError = nil
+        AppPreferences.recordRecentServer(id: id)
         setSelectedServerID(id)
         selectedLibraryIdString = ""
         resetCatalogNavigation()
         showDetailLoading(message: "Loading server…")
-        invalidateLibrarySelectionIfNeeded()
+        scheduleLibrarySidebarSync()
     }
 
     private func selectHome() {
@@ -645,9 +676,7 @@ struct RootShellView: View {
         dismissBrowseMenu()
         // Defer completion check so SwiftUI can paint the pending spinner /
         // loading banner before any synchronous follow-up work on this frame.
-        DispatchQueue.main.async {
-            completeLibraryNavigationIfReady()
-        }
+        scheduleLibraryNavigationCompletion()
     }
 
     /// Short-lived banner for server/home transitions (auto-dismisses).
@@ -789,11 +818,11 @@ struct RootShellView: View {
         showServerSearch = true
     }
 
-    private func refreshSelectedServerLibraries() async {
+    private func refreshSelectedServerLibraries() {
         if let server = selectedPlexServer, !server.isDownloadsServer {
-            await plexRegistry.refreshLibraries(for: server)
+            plexRegistry.scheduleRefreshLibraries(for: server)
         } else if selectedServerID == nil {
-            await refreshLibrariesForAllPlexServers()
+            plexRegistry.scheduleRefreshLibraries(for: plexServers)
         }
     }
 
@@ -905,21 +934,35 @@ struct RootShellView: View {
         }
     }
 
-    private func applyPendingLibrarySelectionIfNeeded() {
-        // Defer the mutation off the current SwiftUI render pass so we don't
-        // re-enter `onChange(selectedLibraryIdString)` / `catalogPath.count`
-        // observers from inside another `onChange` handler. That synchronous
-        // re-entrancy was one of the triggers for the
-        // "onChange(of: AppFocusRoute) action tried to update multiple times
-        // per frame" warning during library refresh.
+    /// Runs library selection reconciliation on the next run-loop turn so
+    /// NavigationStack / sidebar state does not update multiple times per frame.
+    private func scheduleLibrarySidebarSync() {
+        librarySidebarSyncGeneration &+= 1
+        let generation = librarySidebarSyncGeneration
         DispatchQueue.main.async {
-            guard !selectedLibraryIdString.isEmpty,
-                  selectedPlexLibrary == nil,
-                  let library = resolveSelectedLibrary(migrateStoredID: true)
-            else { return }
-            selectedLibraryIdString = library.id
-            resetCatalogNavigation()
+            guard generation == self.librarySidebarSyncGeneration else { return }
+            self.performLibrarySidebarSync()
         }
+    }
+
+    private func scheduleLibraryNavigationCompletion() {
+        DispatchQueue.main.async {
+            self.completeLibraryNavigationIfReady()
+        }
+    }
+
+    @MainActor
+    private func performLibrarySidebarSync() {
+        invalidateLibrarySelectionIfNeeded()
+        guard !selectedLibraryIdString.isEmpty,
+              selectedPlexLibrary == nil,
+              let library = resolveSelectedLibrary(migrateStoredID: true)
+        else {
+            completeLibraryNavigationIfReady()
+            return
+        }
+        selectedLibraryIdString = library.id
+        resetCatalogNavigation()
     }
 
     private func invalidateLibrarySelectionIfNeeded() {
@@ -936,8 +979,9 @@ struct RootShellView: View {
             }
             return
         }
-        if selectedLibraryIdString.isEmpty { return }
-        _ = resolveSelectedLibrary(migrateStoredID: true)
+        guard !selectedLibraryIdString.isEmpty else { return }
+        if resolveSelectedLibrary(migrateStoredID: false) != nil { return }
+        selectedLibraryIdString = ""
     }
 
     private func resolveSelectedLibrary(migrateStoredID: Bool) -> PlexLibrary? {
@@ -1004,7 +1048,7 @@ struct RootShellView: View {
            selectedPlexLibrary == nil {
             ToolbarItem(placement: .automatic) {
                 Button {
-                    Task { await plexRegistry.refreshLibraries(for: server) }
+                    plexRegistry.scheduleRefreshLibraries(for: server, force: true)
                 } label: {
                     Label("Refresh Libraries", systemImage: "arrow.clockwise")
                 }

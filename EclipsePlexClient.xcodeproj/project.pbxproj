@@ -41,22 +41,16 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C57A05632FB8016000237EB8 /* EclipsePlexClient */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = EclipsePlexClient;
 			sourceTree = "<group>";
 		};
 		C57A05712FB8016100237EB8 /* EclipsePlexClientTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = EclipsePlexClientTests;
 			sourceTree = "<group>";
 		};
 		C57A057B2FB8016100237EB8 /* EclipsePlexClientUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = EclipsePlexClientUITests;
 			sourceTree = "<group>";
 		};
@@ -139,7 +133,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = C57A05822FB8016100237EB8 /* Build configuration list for PBXNativeTarget "EclipsePlexClient" */;
 			buildPhases = (
-				987FF7119215FF4E7AF0AE34 /* Prepare MobileVLCKit (iOS) */,
+				0AD618DA2E05B4BECD96F561 /* Prepare MobileVLCKit (iOS) */,
 				FA22181DD79C69C0451A56C4 /* [CP] Check Pods Manifest.lock */,
 				C57A055D2FB8016000237EB8 /* Sources */,
 				C57A055E2FB8016000237EB8 /* Frameworks */,
@@ -273,7 +267,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		987FF7119215FF4E7AF0AE34 /* Prepare MobileVLCKit (iOS) */ = {
+		0AD618DA2E05B4BECD96F561 /* Prepare MobileVLCKit (iOS) */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -352,9 +346,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-EclipsePlexClient/Pods-EclipsePlexClient-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;

@@ -12,7 +12,7 @@ struct PlaybackPresentationItem: Identifiable, Hashable {
 
     var id: String {
         switch request {
-        case .plex(let server, let ratingKey, _, _):
+        case .plex(let server, let ratingKey, _, _, _, _):
             "plex|\(server.id.uuidString)|\(ratingKey)"
         case .downloadedPlexItem(let server, let ratingKey, _):
             "offline|\(server.id.uuidString)|\(ratingKey)"
@@ -66,6 +66,9 @@ private struct PlaybackSessionLayout: ViewModifier {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
                 .zIndex(1000)
+#if os(macOS)
+                .playbackSuppressesMacWindowTitle(true)
+#endif
         case .mini:
             content
                 .frame(width: 1, height: 1)
@@ -78,6 +81,13 @@ private struct PlaybackSessionLayout: ViewModifier {
 }
 
 extension View {
+    /// Hides browse chrome while fullscreen playback is on top (avoids bleed-through).
+    func browseShellSuppressedForPlayback(_ suppressed: Bool) -> some View {
+        opacity(suppressed ? 0 : 1)
+            .allowsHitTesting(!suppressed)
+            .accessibilityHidden(suppressed)
+    }
+
     /// Presents `ContentView` edge-to-edge on iPhone / iPad (avoids navigation bar layout).
     @ViewBuilder
     func eclipsePlexFullscreenPlayback(

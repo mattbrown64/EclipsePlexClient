@@ -198,6 +198,7 @@ struct PlaylistOrCollectionItemsView: View {
     let navigationTitle: String
 
     @EnvironmentObject private var playbackQueue: PlaybackQueueManager
+    @EnvironmentObject private var playbackPresenter: PlaybackPresenter
 
     var body: some View {
         CatalogListView(
@@ -209,11 +210,46 @@ struct PlaylistOrCollectionItemsView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    playbackQueue.shuffle()
+                    Task { await playAll(shuffle: false) }
+                } label: {
+                    Label("Play All", systemImage: "play.fill")
+                }
+                Button {
+                    Task { await playAll(shuffle: true) }
                 } label: {
                     Label("Shuffle", systemImage: "shuffle")
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func playAll(shuffle: Bool) async {
+        guard plexServer.usesLivePlexAPI else { return }
+        do {
+            let client = try PlexMediaServerClient(server: plexServer)
+            let page = try await client.fetchCatalogPage(
+                library: library,
+                parent: parent,
+                offset: 0
+            )
+            let items = page.nodes.compactMap { node -> PlaybackQueueItem? in
+                guard let key = node.playbackRatingKey else { return nil }
+                return PlaybackQueueItem(
+                    serverId: plexServer.id,
+                    ratingKey: key,
+                    title: node.listTitle
+                )
+            }
+            guard !items.isEmpty else { return }
+            var queue = items
+            if shuffle { queue.shuffle() }
+            playbackQueue.replaceAll(queue, startAt: 0)
+            if let first = playbackQueue.currentItem {
+                playbackPresenter.present(first.playbackRequest(server: plexServer))
+            }
+        } catch {
+            AppToastCenter.show(error.localizedDescription)
         }
     }
 }

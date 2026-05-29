@@ -26,8 +26,7 @@ struct AppSidebarView: View {
     var pendingLibraryID: String? = nil
 
     var isLoadingLibraries: Bool = false
-    var librariesLoadError: String?
-    var showsLibrariesError: Bool = false
+    var connectionIssueForServer: (PlexServer) -> PlexServerConnectionIssue? = { _ in nil }
 
     var isUserAddedServer: (UUID) -> Bool = { _ in false }
     var serverReachable: (UUID) -> Bool? = { _ in nil }
@@ -44,6 +43,7 @@ struct AppSidebarView: View {
     var onSelectAllServersHome: () -> Void = {}
     var onSelectSettings: () -> Void = {}
     var onRetryLibraries: () -> Void = {}
+    var onSignInToPlex: () -> Void = {}
     var isAggregateHomeSelected: Bool = false
     var menuControlsDisabled: Bool = false
 
@@ -94,18 +94,11 @@ struct AppSidebarView: View {
         ScrollViewReader { scrollProxy in
             sidebarList
                 .onChange(of: focusCoordinator.sidebarFocusedIndex) { _, _ in
-                    scrollSidebarFocus(into: scrollProxy)
-#if os(tvOS)
-                    syncTVSidebarFocusFromCoordinator()
-#endif
+                    scheduleSidebarScroll(into: scrollProxy)
                 }
                 .onChange(of: focusCoordinator.route) { _, route in
-                    if route == .sidebar {
-                        scrollSidebarFocus(into: scrollProxy)
-#if os(tvOS)
-                        syncTVSidebarFocusFromCoordinator()
-#endif
-                    }
+                    guard route == .sidebar else { return }
+                    scheduleSidebarScroll(into: scrollProxy)
                 }
         }
     }
@@ -127,6 +120,7 @@ struct AppSidebarView: View {
                         serverButton(
                             server,
                             focusRowID: FocusRowID.downloadsServer(server.id),
+                            connectionIssue: nil,
                             isReachable: nil,
                             badge: activeDownloadCount
                         )
@@ -157,6 +151,7 @@ struct AppSidebarView: View {
                     serverButton(
                         server,
                         focusRowID: FocusRowID.plexServer(server.id),
+                        connectionIssue: connectionIssueForServer(server),
                         isReachable: serverReachable(server.id)
                     )
                     .contextMenu {
@@ -189,25 +184,19 @@ struct AppSidebarView: View {
                         onSelectHome()
                     }
 
-                    if isLoadingLibraries {
+                    if let issue = connectionIssueForServer(selectedServer) {
+                        serverConnectionBanner(issue, server: selectedServer)
+                    } else if isLoadingLibraries {
                         HStack {
-                            ProgressView()
+                            fixedProgressIndicator()
                             Text("Loading libraries…")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    }
-
-                    if showsLibrariesError, let librariesLoadError {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(librariesLoadError)
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                            Button("Retry") {
-                                onRetryLibraries()
-                            }
+                    } else if libraries.isEmpty, selectedServer.usesLivePlexAPI {
+                        Text("No libraries on this server.")
                             .font(.caption)
-                        }
+                            .foregroundStyle(.secondary)
                     }
 
                     if !favoriteLibraries.isEmpty {
@@ -314,9 +303,45 @@ struct AppSidebarView: View {
     }
 #endif
 
+    private func serverConnectionBanner(_ issue: PlexServerConnectionIssue, server: PlexServer) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(issue.title, systemImage: issue.systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+            Text(issue.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 12) {
+                if issue.offersPlexAccountSignIn {
+                    Button {
+                        onSignInToPlex()
+                    } label: {
+                        Label("Sign in to Plex", systemImage: "person.badge.key")
+                    }
+                    .font(.caption)
+                }
+                if issue.needsEditServer {
+                    Button("Edit Server") {
+                        onEditServer(server)
+                    }
+                    .font(.caption)
+                }
+                if issue.canRetryLibraries {
+                    Button("Retry") {
+                        onRetryLibraries()
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
     private func serverButton(
         _ server: PlexServer,
         focusRowID: String,
+        connectionIssue: PlexServerConnectionIssue?,
         isReachable: Bool?,
         badge: Int = 0
     ) -> some View {
@@ -324,15 +349,20 @@ struct AppSidebarView: View {
             onSelectServer(server.id)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if let isReachable {
+                if let color = serverStatusColor(connectionIssue: connectionIssue, isReachable: isReachable) {
                     Circle()
-                        .fill(isReachable ? Color.green : Color.red)
+                        .fill(color)
                         .frame(width: 8, height: 8)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name)
                         .foregroundStyle(.primary)
-                    if isReachable == false, let lastOnline = serverLastOnlineAt(server.id) {
+                    if let connectionIssue {
+                        Text(connectionIssue.serverRowSubtitle)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
+                    } else if isReachable == false, let lastOnline = serverLastOnlineAt(server.id) {
                         Text("Last online \(Self.relativeDateFormatter.localizedString(for: lastOnline, relativeTo: Date()))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -379,6 +409,29 @@ struct AppSidebarView: View {
 #endif
     }
 
+    private func serverStatusColor(
+        connectionIssue: PlexServerConnectionIssue?,
+        isReachable: Bool?
+    ) -> Color? {
+        if let connectionIssue {
+            switch connectionIssue {
+            case .missingToken, .invalidAddress, .librariesFailed:
+                return .orange
+            case .offline:
+                return .red
+            }
+        }
+        guard let isReachable else { return nil }
+        return isReachable ? .green : .red
+    }
+
+    /// Defers `scrollTo` so AppKit layout is not re-entered from `onChange`.
+    private func scheduleSidebarScroll(into proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            scrollSidebarFocus(into: proxy)
+        }
+    }
+
     private func scrollSidebarFocus(into proxy: ScrollViewProxy) {
         guard focusCoordinator.route == .sidebar,
               focusCoordinator.sidebarRows.indices.contains(focusCoordinator.sidebarFocusedIndex)
@@ -387,6 +440,9 @@ struct AppSidebarView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             proxy.scrollTo(rowID, anchor: .center)
         }
+#if os(tvOS)
+        syncTVSidebarFocusFromCoordinator()
+#endif
     }
 
     private func rowButton(
@@ -411,8 +467,7 @@ struct AppSidebarView: View {
                 }
                 Spacer(minLength: 0)
                 if isPending {
-                    ProgressView()
-                        .platformControlSize(.small)
+                    fixedProgressIndicator()
                         .accessibilityLabel("Loading")
                 } else if isSelected {
                     Image(systemName: "checkmark")

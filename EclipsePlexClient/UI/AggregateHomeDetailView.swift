@@ -177,7 +177,9 @@ struct AggregateHomeDetailView: View {
             plexRegistry.invalidateLibraryCache()
         }
         isLoading = true
-        await plexRegistry.refreshLibraries(for: plexServers, force: invalidateCache)
+        await Task.detached { @MainActor in
+            await plexRegistry.refreshLibraries(for: plexServers, force: invalidateCache)
+        }.value
         defer { isLoading = false }
         let loaded = await AggregateHomeHubService.load(
             servers: plexServers,

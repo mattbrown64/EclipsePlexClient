@@ -82,6 +82,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
         // `dismantleNSView` calls `teardown(savePosition:)`; avoid duplicate work in deinit.
 
         func attach(to view: VLCVideoView) {
+            controller.hostWindow = view.window
             if videoView !== view {
                 videoView = view
                 if !view.gestureRecognizers.contains(where: { $0 is NSClickGestureRecognizer }) {
@@ -286,6 +287,7 @@ struct MacVLCPlayerView: NSViewRepresentable {
                         let selection = self.playback.streamOptions.subtitleSelection
                         DispatchQueue.main.async {
                             self.controller.applyPreferredSubtitle(from: selection)
+                            self.controller.applyPreferredAudioLanguageIfNeeded()
                         }
                     }
                 }

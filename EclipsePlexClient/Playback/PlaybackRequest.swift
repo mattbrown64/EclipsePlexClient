@@ -2,7 +2,14 @@ import Foundation
 
 /// What to play — Plex stream, local file, or bundled demo (previews).
 nonisolated enum PlaybackRequest: Hashable, Sendable {
-    case plex(server: PlexServer, ratingKey: String, title: String?, episodeContext: EpisodePlayContext? = nil)
+    case plex(
+        server: PlexServer,
+        ratingKey: String,
+        title: String?,
+        episodeContext: EpisodePlayContext? = nil,
+        startFromBeginning: Bool = false,
+        plexResumePositionMs: Int? = nil
+    )
     /// Offline Plex item — resolve the file on disk at playback time via `OfflineDownloadManager`.
     case downloadedPlexItem(server: PlexServer, ratingKey: String, title: String?)
     case remoteStream(URL)
@@ -11,7 +18,7 @@ nonisolated enum PlaybackRequest: Hashable, Sendable {
 
     var displayTitle: String? {
         switch self {
-        case .plex(_, _, let title, _): return title
+        case .plex(_, _, let title, _, _, _): return title
         case .downloadedPlexItem(_, _, let title): return title
         case .remoteStream: return nil
         case .localFile(let url): return url.lastPathComponent
@@ -21,7 +28,7 @@ nonisolated enum PlaybackRequest: Hashable, Sendable {
 
     var scrobbleServerAndRatingKey: (PlexServer, String)? {
         switch self {
-        case .plex(let server, let ratingKey, _, _): return (server, ratingKey)
+        case .plex(let server, let ratingKey, _, _, _, _): return (server, ratingKey)
         case .downloadedPlexItem(let server, let ratingKey, _): return (server, ratingKey)
         default: return nil
         }
@@ -39,7 +46,7 @@ enum PlaybackResolver {
     ) async throws -> ResolvedPlayback {
         AppLog.playbackDebug("PlaybackResolver.resolve start")
         switch request {
-        case .plex(let server, let ratingKey, _, _):
+        case .plex(let server, let ratingKey, _, _, let startFromBeginning, let plexResumePositionMs):
             guard server.usesLivePlexAPI else {
                 throw PlexAPIError.serverNotConfiguredForLiveAPI
             }
@@ -60,7 +67,12 @@ enum PlaybackResolver {
                     label: stream.label
                 )
             }
-            let resumeMs = PlaybackPositionStore.load(serverId: server.id, ratingKey: ratingKey)
+            let resumeMs = Self.resolveResumePositionMs(
+                serverId: server.id,
+                ratingKey: ratingKey,
+                startFromBeginning: startFromBeginning,
+                plexResumePositionMs: plexResumePositionMs
+            )
             return ResolvedPlayback(
                 candidates: candidates,
                 httpHeaderFields: resolution.streams[0].httpHeaderFields,
@@ -108,6 +120,27 @@ enum PlaybackResolver {
                 streamKind: .localFile
             )
         }
+    }
+
+    private static func resolveResumePositionMs(
+        serverId: UUID,
+        ratingKey: String,
+        startFromBeginning: Bool,
+        plexResumePositionMs: Int?
+    ) -> Int? {
+        if startFromBeginning {
+            PlaybackPositionStore.clear(serverId: serverId, ratingKey: ratingKey)
+            return nil
+        }
+        let localMs = PlaybackPositionStore.load(serverId: serverId, ratingKey: ratingKey)
+        let candidates = [localMs, plexResumePositionMs].compactMap { $0 }.filter { $0 > 5_000 }
+        guard !candidates.isEmpty else { return nil }
+        let best = candidates.max()!
+        if PlaybackPreferences.alwaysResumeWhereLeftOff {
+            return best
+        }
+        // Explicit resume paths pass plex/local offsets; generic Watch without resume uses nil at call site.
+        return plexResumePositionMs != nil || localMs != nil ? best : nil
     }
 }
 

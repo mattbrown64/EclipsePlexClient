@@ -1,4 +1,3 @@
-import CoreGraphics
 import Foundation
 
 /// Target transcode / playback quality (Plex `videoResolution` when transcoding).
@@ -107,6 +106,13 @@ enum PlaybackPreferences {
     private static let speedKey = "playback.speed.v1"
     private static let directPlayLANKey = "playback.preferDirectPlayLAN.v1"
     private static let preferHLSKey = "playback.preferHLS.v1"
+    private static let alwaysResumeKey = "playback.alwaysResume.v1"
+    private static let preferredSubtitleLanguageKey = "playback.preferredSubtitleLanguage.v1"
+    private static let preferredAudioLanguageKey = "playback.preferredAudioLanguage.v1"
+    private static let alwaysSkipIntrosKey = "playback.alwaysSkipIntros.v1"
+    private static let subtitleFontSizeKey = "playback.subtitleFontSize.v1"
+    private static let subtitleFontNameKey = "playback.subtitleFontName.v1"
+    private static let subtitleColorHexKey = "playback.subtitleColorHex.v1"
 
     static var preferDirectPlayOnLAN: Bool {
         get {
@@ -170,6 +176,78 @@ enum PlaybackPreferences {
 
     static func savePlaybackRate(_ rate: Float) {
         UserDefaults.standard.set(rate, forKey: speedKey)
+    }
+
+    /// When true, opening playback resumes from the best known position (local or Plex).
+    static var alwaysResumeWhereLeftOff: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: alwaysResumeKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: alwaysResumeKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: alwaysResumeKey) }
+    }
+
+    static var preferredSubtitleLanguage: String? {
+        get {
+            let raw = UserDefaults.standard.string(forKey: preferredSubtitleLanguageKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return raw.isEmpty ? nil : raw
+        }
+        set {
+            if let newValue, !newValue.isEmpty {
+                UserDefaults.standard.set(newValue, forKey: preferredSubtitleLanguageKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: preferredSubtitleLanguageKey)
+            }
+        }
+    }
+
+    static var preferredAudioLanguage: String? {
+        get {
+            let raw = UserDefaults.standard.string(forKey: preferredAudioLanguageKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return raw.isEmpty ? nil : raw
+        }
+        set {
+            if let newValue, !newValue.isEmpty {
+                UserDefaults.standard.set(newValue, forKey: preferredAudioLanguageKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: preferredAudioLanguageKey)
+            }
+        }
+    }
+
+    static var alwaysSkipIntros: Bool {
+        get { UserDefaults.standard.bool(forKey: alwaysSkipIntrosKey) }
+        set { UserDefaults.standard.set(newValue, forKey: alwaysSkipIntrosKey) }
+    }
+
+    static var subtitleFontSize: Double {
+        get {
+            let stored = UserDefaults.standard.double(forKey: subtitleFontSizeKey)
+            return stored > 0 ? stored : 14
+        }
+        set { UserDefaults.standard.set(newValue, forKey: subtitleFontSizeKey) }
+    }
+
+    static var subtitleFontName: String? {
+        get {
+            let raw = UserDefaults.standard.string(forKey: subtitleFontNameKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return raw.isEmpty ? nil : raw
+        }
+        set {
+            if let newValue, !newValue.isEmpty {
+                UserDefaults.standard.set(newValue, forKey: subtitleFontNameKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: subtitleFontNameKey)
+            }
+        }
+    }
+
+    static var subtitleColorHex: String {
+        get { UserDefaults.standard.string(forKey: subtitleColorHexKey) ?? "FFFFFF" }
+        set { UserDefaults.standard.set(newValue, forKey: subtitleColorHexKey) }
     }
 }
 

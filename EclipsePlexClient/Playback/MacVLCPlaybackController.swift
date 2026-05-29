@@ -49,6 +49,11 @@ final class MacVLCPlaybackController: ObservableObject {
     @Published private(set) var playbackRate: Float = 1.0
 
     weak var player: VLCMediaPlayer?
+    weak var hostWindow: NSWindow?
+
+    func toggleWindowFullScreen() {
+        hostWindow?.toggleFullScreen(nil)
+    }
 
     var positionMs: Int { positionTracker.positionMs }
     var durationMs: Int { positionTracker.durationMs }
@@ -258,12 +263,32 @@ final class MacVLCPlaybackController: ObservableObject {
         case .off:
             selectSubtitleTrack(index: -1)
         case .auto:
-            if let first = subtitleTracks.first {
+            if let preferred = PlaybackPreferences.preferredSubtitleLanguage,
+               let track = subtitleTracks.first(where: { Self.matchesLanguage($0.title, preferred) }) {
+                selectSubtitleTrack(index: track.index)
+            } else if let first = subtitleTracks.first {
                 selectSubtitleTrack(index: first.index)
             }
         case .plexStream:
             break
         }
+    }
+
+    func applyPreferredAudioLanguageIfNeeded() {
+        guard let preferred = PlaybackPreferences.preferredAudioLanguage,
+              let track = audioTracks.first(where: { Self.matchesLanguage($0.title, preferred) })
+        else { return }
+        selectAudioTrack(index: track.index)
+    }
+
+    private static func matchesLanguage(_ trackTitle: String, _ preferred: String) -> Bool {
+        let norm = preferred.lowercased()
+        let title = trackTitle.lowercased()
+        if title.contains(norm) { return true }
+        if norm.count == 2 || norm.count == 3 {
+            return title.contains("[\(norm)]") || title.hasPrefix("\(norm) ")
+        }
+        return false
     }
 
     static func format(ms: Int) -> String {

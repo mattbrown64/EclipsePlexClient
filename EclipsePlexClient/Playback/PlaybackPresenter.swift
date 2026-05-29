@@ -168,8 +168,15 @@ extension View {
         }
 #else
         overlay {
-            PlaybackSessionRoot(presenter: presenter, dependencies: dependencies)
-                .ignoresSafeArea()
+            ZStack {
+                if presenter.hasActiveSession, presenter.presentationMode == .fullScreen {
+                    Color.black
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+                }
+                PlaybackSessionRoot(presenter: presenter, dependencies: dependencies)
+            }
+            .ignoresSafeArea()
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if presenter.hasActiveSession, presenter.presentationMode == .mini {

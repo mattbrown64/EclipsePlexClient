@@ -9,6 +9,9 @@ import SwiftUI
 
 @main
 struct EclipsePlexClientApp: App {
+#if os(macOS)
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var macAppDelegate
+#endif
 #if os(iOS)
     @UIApplicationDelegateAdaptor(OfflineDownloadAppDelegate.self) private var appDelegate
 #endif
@@ -23,6 +26,7 @@ struct EclipsePlexClientApp: App {
     @StateObject private var toastCenter = AppToastCenter()
     @StateObject private var focusCoordinator = KeyboardFocusCoordinator()
     @StateObject private var playbackQueue = PlaybackQueueManager()
+    @StateObject private var sleepTimer = SleepTimerController()
     @AppStorage("appVisualTheme") private var visualThemeRaw = AppVisualTheme.eclipse.rawValue
 
     private var visualTheme: AppVisualTheme {
@@ -41,7 +45,7 @@ struct EclipsePlexClientApp: App {
                     .environmentObject(toastCenter)
                     .environmentObject(focusCoordinator)
                     .environmentObject(playbackQueue)
-                    .environmentObject(playbackPresenter)
+                    .environmentObject(sleepTimer)
                     .appToastOverlay(toastCenter)
                     .environmentObject(bootstrapController)
 
@@ -50,11 +54,27 @@ struct EclipsePlexClientApp: App {
                         .transition(.opacity)
                 }
             }
+            .environmentObject(playbackPresenter)
             .preferredColorScheme(.dark)
             .environment(\.appThemePalette, visualTheme.palette)
             .environment(\.themeAccent, themeAccentColor)
             .tint(themeAccentColor)
-            .appThemedShellBackground(visualTheme.palette)
+            .appThemedShellBackground(
+                playbackPresenter.hasActiveSession && playbackPresenter.presentationMode == .fullScreen
+                    ? nil
+                    : visualTheme.palette
+            )
+#if os(macOS)
+            .onAppear {
+                syncPlaybackWindowTitleSuppression(presenter: playbackPresenter)
+            }
+            .onChange(of: playbackPresenter.hasActiveSession) { _, _ in
+                syncPlaybackWindowTitleSuppression(presenter: playbackPresenter)
+            }
+            .onChange(of: playbackPresenter.presentationMode) { _, _ in
+                syncPlaybackWindowTitleSuppression(presenter: playbackPresenter)
+            }
+#endif
 #if os(iOS) || os(macOS)
             .background {
                 BrowseKeyboardCaptureView(coordinator: focusCoordinator)
@@ -79,7 +99,19 @@ struct EclipsePlexClientApp: App {
                     NotificationCenter.default.post(name: .eclipsePlexRefreshLibraries, object: nil)
                 }
                 .keyboardShortcut("r", modifiers: .command)
+                Button("Refresh All") {
+                    NotificationCenter.default.post(name: .eclipsePlexRefreshAll, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             }
+#if os(macOS)
+            CommandMenu("View") {
+                Button("Enter Full Screen") {
+                    NotificationCenter.default.post(name: .eclipsePlexToggleFullScreen, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: [.control, .command])
+            }
+#endif
         }
 #endif
     }
@@ -87,5 +119,16 @@ struct EclipsePlexClientApp: App {
 
 extension Notification.Name {
     static let eclipsePlexOpenBrowseMenu = Notification.Name("eclipsePlexOpenBrowseMenu")
+    static let eclipsePlexOpenConnectionPicker = Notification.Name("eclipsePlexOpenConnectionPicker")
+    static let eclipsePlexRefreshAll = Notification.Name("eclipsePlexRefreshAll")
+    static let eclipsePlexToggleFullScreen = Notification.Name("eclipsePlexToggleFullScreen")
 }
+
+#if os(macOS)
+@MainActor
+private func syncPlaybackWindowTitleSuppression(presenter: PlaybackPresenter) {
+    let suppress = presenter.hasActiveSession && presenter.presentationMode == .fullScreen
+    PlaybackWindowTitleController.shared.setSuppressed(suppress)
+}
+#endif
 

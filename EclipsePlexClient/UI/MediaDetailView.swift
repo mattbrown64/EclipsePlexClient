@@ -14,6 +14,7 @@ struct MediaDetailView: View {
     @EnvironmentObject private var downloadManager: OfflineDownloadManager
     @EnvironmentObject private var focusCoordinator: KeyboardFocusCoordinator
     @EnvironmentObject private var playbackPresenter: PlaybackPresenter
+    @EnvironmentObject private var playbackQueue: PlaybackQueueManager
     @EnvironmentObject private var plexRegistry: PlexServerRegistry
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dismissBrowseMenu) private var dismissBrowseMenu
@@ -183,7 +184,9 @@ struct MediaDetailView: View {
             server: plexServer,
             ratingKey: ratingKey,
             title: detailTitle,
-            episodeContext: episodePlayContext
+            episodeContext: episodePlayContext,
+            startFromBeginning: !resume,
+            plexResumePositionMs: resume ? detail?.viewOffsetMs : nil
         )
         dismissBrowseMenu?.dismiss()
         playbackPresenter.present(request)
@@ -332,6 +335,21 @@ struct MediaDetailView: View {
         }
     }
 
+    private var resumePositionMs: Int? {
+        let plexMs = detail?.viewOffsetMs
+        let localMs = playbackRatingKey.flatMap {
+            PlaybackPositionStore.load(serverId: plexServer.id, ratingKey: $0)
+        }
+        let candidates = [plexMs, localMs].compactMap { $0 }.filter { $0 > 5_000 }
+        return candidates.max()
+    }
+
+    private var resumeButtonLabel: String {
+        guard let ms = resumePositionMs else { return "Resume" }
+        let seconds = ms / 1000
+        return "Resume from \(formatDuration(seconds))"
+    }
+
     private var canResumePlayback: Bool {
         guard let detail else { return false }
         if detail.isWatched { return false }
@@ -372,7 +390,13 @@ struct MediaDetailView: View {
             } else if plexServer.usesLivePlexAPI {
                 HStack(spacing: 12) {
                     if canResumePlayback {
-                        watchNavigationLink(ratingKey: ratingKey, label: "Resume", isProminent: true)
+                        watchNavigationLink(
+                            ratingKey: ratingKey,
+                            label: resumeButtonLabel,
+                            isProminent: true,
+                            startFromBeginning: false,
+                            forceResume: true
+                        )
 #if os(tvOS)
                             .focused($tvDetailFocus, equals: .resume)
 #endif
@@ -380,11 +404,26 @@ struct MediaDetailView: View {
                     watchNavigationLink(
                         ratingKey: ratingKey,
                         label: canResumePlayback ? "Play from start" : "Watch",
-                        isProminent: !canResumePlayback
+                        isProminent: !canResumePlayback,
+                        startFromBeginning: canResumePlayback,
+                        forceResume: false
                     )
 #if os(tvOS)
                     .focused($tvDetailFocus, equals: .watch)
 #endif
+                    Button {
+                        playbackQueue.enqueue(
+                            PlaybackQueueItem(
+                                serverId: plexServer.id,
+                                ratingKey: ratingKey,
+                                title: detailTitle,
+                                episodeContext: episodePlayContext
+                            )
+                        )
+                        AppToastCenter.show("Added to Up Next")
+                    } label: {
+                        Label("Up Next", systemImage: "text.line.last.and.arrowtriangle.forward")
+                    }
                     if detail != nil {
                         Button {
                             Task { await toggleWatched(ratingKey: ratingKey) }
@@ -454,14 +493,19 @@ struct MediaDetailView: View {
     private func watchNavigationLink(
         ratingKey: String,
         label: String,
-        isProminent: Bool
+        isProminent: Bool,
+        startFromBeginning: Bool,
+        forceResume: Bool
     ) -> some View {
+        let plexMs = forceResume || PlaybackPreferences.alwaysResumeWhereLeftOff ? detail?.viewOffsetMs : nil
         playButton(
             request: .plex(
                 server: plexServer,
                 ratingKey: ratingKey,
                 title: detailTitle,
-                episodeContext: episodePlayContext
+                episodeContext: episodePlayContext,
+                startFromBeginning: startFromBeginning,
+                plexResumePositionMs: startFromBeginning ? nil : plexMs
             ),
             label: label,
             isProminent: isProminent

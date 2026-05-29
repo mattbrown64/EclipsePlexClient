@@ -21,11 +21,34 @@ struct PlaybackChromeIconButton: View {
             Image(systemName: systemImage)
                 .font(.body.weight(.semibold))
                 .frame(width: 36, height: 36)
-                .background(.ultraThinMaterial, in: Circle())
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+/// Groups playback controls in a material pill with a visible capsule outline.
+private struct PlaybackChromeCapsuleModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(.ultraThinMaterial)
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .strokeBorder(.white.opacity(0.32), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
+    }
+}
+
+extension View {
+    func playbackChromeCapsule() -> some View {
+        modifier(PlaybackChromeCapsuleModifier())
     }
 }
 
@@ -116,16 +139,18 @@ struct PlayerChromeOverlay<TopTrailing: View, Bottom: View>: View {
             topTrailing()
                 .frame(minWidth: 44, alignment: .trailing)
         }
+        .playbackChromeCapsule()
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .padding(.top, insets.top)
+        .padding(.top, max(insets.top, 12))
         .padding(.leading, insets.leading)
         .padding(.trailing, insets.trailing)
     }
 
     private func bottomChrome(insets: EdgeInsets) -> some View {
         bottom()
-            .padding(.bottom, insets.bottom)
+            .playbackChromeCapsule()
+            .padding(.horizontal, 16)
+            .padding(.bottom, max(insets.bottom, 12))
             .padding(.leading, insets.leading)
             .padding(.trailing, insets.trailing)
     }
