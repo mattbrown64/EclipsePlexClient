@@ -1,5 +1,12 @@
 import Foundation
 
+/// How tune-in position is chosen for Plex items.
+nonisolated enum PlaybackTuneInMode: Hashable, Sendable {
+    case normal
+    /// Virtual channel offset only; ignores personal resume stores.
+    case pseudoTVLive
+}
+
 /// What to play — Plex stream, local file, or bundled demo (previews).
 nonisolated enum PlaybackRequest: Hashable, Sendable {
     case plex(
@@ -8,7 +15,8 @@ nonisolated enum PlaybackRequest: Hashable, Sendable {
         title: String?,
         episodeContext: EpisodePlayContext? = nil,
         startFromBeginning: Bool = false,
-        plexResumePositionMs: Int? = nil
+        plexResumePositionMs: Int? = nil,
+        tuneInMode: PlaybackTuneInMode = .normal
     )
     /// Offline Plex item — resolve the file on disk at playback time via `OfflineDownloadManager`.
     case downloadedPlexItem(server: PlexServer, ratingKey: String, title: String?)
@@ -18,7 +26,7 @@ nonisolated enum PlaybackRequest: Hashable, Sendable {
 
     var displayTitle: String? {
         switch self {
-        case .plex(_, _, let title, _, _, _): return title
+        case .plex(_, _, let title, _, _, _, _): return title
         case .downloadedPlexItem(_, _, let title): return title
         case .remoteStream: return nil
         case .localFile(let url): return url.lastPathComponent
@@ -28,7 +36,7 @@ nonisolated enum PlaybackRequest: Hashable, Sendable {
 
     var scrobbleServerAndRatingKey: (PlexServer, String)? {
         switch self {
-        case .plex(let server, let ratingKey, _, _, _, _): return (server, ratingKey)
+        case .plex(let server, let ratingKey, _, _, _, _, _): return (server, ratingKey)
         case .downloadedPlexItem(let server, let ratingKey, _): return (server, ratingKey)
         default: return nil
         }
@@ -46,7 +54,7 @@ enum PlaybackResolver {
     ) async throws -> ResolvedPlayback {
         AppLog.playbackDebug("PlaybackResolver.resolve start")
         switch request {
-        case .plex(let server, let ratingKey, _, _, let startFromBeginning, let plexResumePositionMs):
+        case .plex(let server, let ratingKey, _, _, let startFromBeginning, let plexResumePositionMs, let tuneInMode):
             guard server.usesLivePlexAPI else {
                 throw PlexAPIError.serverNotConfiguredForLiveAPI
             }
@@ -71,7 +79,8 @@ enum PlaybackResolver {
                 serverId: server.id,
                 ratingKey: ratingKey,
                 startFromBeginning: startFromBeginning,
-                plexResumePositionMs: plexResumePositionMs
+                plexResumePositionMs: plexResumePositionMs,
+                tuneInMode: tuneInMode
             )
             return ResolvedPlayback(
                 candidates: candidates,
@@ -81,7 +90,8 @@ enum PlaybackResolver {
                 streamOptions: options,
                 plexSubtitleStreams: resolution.subtitleStreams,
                 sourceVideoSize: resolution.sourceVideoSize,
-                playbackMarkers: resolution.playbackMarkers
+                playbackMarkers: resolution.playbackMarkers,
+                suppressLocalResume: tuneInMode == .pseudoTVLive
             )
 
         case .downloadedPlexItem(let server, let ratingKey, _):
@@ -126,8 +136,13 @@ enum PlaybackResolver {
         serverId: UUID,
         ratingKey: String,
         startFromBeginning: Bool,
-        plexResumePositionMs: Int?
+        plexResumePositionMs: Int?,
+        tuneInMode: PlaybackTuneInMode
     ) -> Int? {
+        if tuneInMode == .pseudoTVLive {
+            if let ms = plexResumePositionMs, ms > 0 { return ms }
+            return nil
+        }
         if startFromBeginning {
             PlaybackPositionStore.clear(serverId: serverId, ratingKey: ratingKey)
             return nil

@@ -12,7 +12,7 @@ struct PlaybackPresentationItem: Identifiable, Hashable {
 
     var id: String {
         switch request {
-        case .plex(let server, let ratingKey, _, _, _, _):
+        case .plex(let server, let ratingKey, _, _, _, _, _):
             "plex|\(server.id.uuidString)|\(ratingKey)"
         case .downloadedPlexItem(let server, let ratingKey, _):
             "offline|\(server.id.uuidString)|\(ratingKey)"

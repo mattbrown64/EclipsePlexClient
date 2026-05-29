@@ -926,6 +926,8 @@ struct RootShellView: View {
                     )
                 case .liveTV:
                     LiveTVBrowseView(plexServer: server)
+                case .pseudoTV:
+                    PseudoTVChannelsView(plexServer: server, registry: plexRegistry)
                 }
             }
             .offlineDownloads(downloadManager)

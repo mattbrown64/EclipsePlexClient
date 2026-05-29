@@ -25,7 +25,7 @@ struct ContentView: View {
     private var playbackLoadTaskKey: String {
         guard let req = activeRequest ?? request else { return "none" }
         switch req {
-        case .plex(let server, let ratingKey, _, _, _, _):
+        case .plex(let server, let ratingKey, _, _, _, _, _):
             return "plex|\(server.id.uuidString)|\(ratingKey)"
         case .downloadedPlexItem(let server, let ratingKey, _):
             return "offline|\(server.id.uuidString)|\(ratingKey)"
@@ -118,7 +118,7 @@ struct ContentView: View {
             Button("Exit", action: { playbackPresenter.stop() })
                 .buttonStyle(.pressableBordered)
             if let req = activeRequest ?? request,
-               case .plex(let server, _, _, _, _, _) = req,
+               case .plex(let server, _, _, _, _, _, _) = req,
                server.connectionCandidates.count > 1 {
                 Button("Try another connection") {
                     NotificationCenter.default.post(
@@ -173,7 +173,7 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             AppLog.playback("ContentView playback failed: \(error.localizedDescription)")
             loadError = PlaybackErrorMessages.friendly(error.localizedDescription)
-            if case .plex(let server, _, _, _, _, _) = req, server.connectionCandidates.count > 1 {
+            if case .plex(let server, _, _, _, _, _, _) = req, server.connectionCandidates.count > 1 {
                 NotificationCenter.default.post(
                     name: .eclipsePlexOpenConnectionPicker,
                     object: nil,
@@ -186,7 +186,7 @@ struct ContentView: View {
     private func matchesRequest(_ request: PlaybackRequest, _ playback: ResolvedPlayback) -> Bool {
         guard let ctx = playback.resumeContext else { return false }
         switch request {
-        case .plex(let server, let ratingKey, _, _, _, _):
+        case .plex(let server, let ratingKey, _, _, _, _, _):
             return ctx.serverId == server.id && ctx.ratingKey == ratingKey
         case .downloadedPlexItem(let server, let ratingKey, _):
             return ctx.serverId == server.id && ctx.ratingKey == ratingKey
@@ -227,7 +227,7 @@ private struct VideoPlaybackView: View {
     @State private var playNextCountdownTask: Task<Void, Never>?
 
     private var playNextTaskKey: String {
-        guard case .plex(let server, let ratingKey, _, _, _, _) = request else { return "none" }
+        guard case .plex(let server, let ratingKey, _, _, _, _, _) = request else { return "none" }
         return "\(server.id.uuidString)|\(ratingKey)"
     }
 
@@ -852,7 +852,7 @@ private struct VideoPlaybackView: View {
     }
 
     private var currentServerId: UUID {
-        guard case .plex(let server, _, _, _, _, _) = request else {
+        guard case .plex(let server, _, _, _, _, _, _) = request else {
             return UUID()
         }
         return server.id
@@ -904,7 +904,7 @@ private struct VideoPlaybackView: View {
     private func loadPlaybackPresentationInfo() async {
         windowTitle = nil
         chromeEpisodeLine = nil
-        guard case .plex(let server, let ratingKey, let fallbackTitle, let episodeContext, _, _) = request else {
+        guard case .plex(let server, let ratingKey, let fallbackTitle, let episodeContext, _, _, _) = request else {
             playbackMarkers = []
             windowTitle = request?.displayTitle
             chromeEpisodeLine = nil
@@ -995,7 +995,7 @@ private struct VideoPlaybackView: View {
         nextEpisodeCandidate = nil
         previousEpisodeCandidate = nil
         nextEpisodeContext = nil
-        guard case .plex(let server, let ratingKey, _, let explicitContext, _, _) = request else { return }
+        guard case .plex(let server, let ratingKey, _, let explicitContext, _, _, _) = request else { return }
         guard server.usesLivePlexAPI else { return }
 
         guard let (context, library) = await resolvePlayNextContext(
@@ -1147,7 +1147,7 @@ private struct VideoPlaybackView: View {
 
     @MainActor
     private func startPlayNextEpisode(_ episode: PlexEpisodeSummary, context: EpisodePlayContext) {
-        guard case .plex(let server, _, let title, _, _, _) = request else { return }
+        guard case .plex(let server, _, let title, _, _, _, _) = request else { return }
         cancelPlayNextCountdown()
         isPlayNextOverlayVisible = false
         nextEpisodeCandidate = nil

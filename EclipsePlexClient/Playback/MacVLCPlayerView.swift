@@ -354,11 +354,12 @@ struct MacVLCPlayerView: NSViewRepresentable {
         }
 
         private func persistPositionIfNeeded() {
-            guard let ctx = playback.resumeContext, let player else { return }
+            guard !playback.suppressLocalResume, let ctx = playback.resumeContext, let player else { return }
             persistPosition(from: player, context: ctx)
         }
 
         private func persistPosition(from player: VLCMediaPlayer, context: PlaybackResumeContext) {
+            guard !playback.suppressLocalResume else { return }
             let position = Int(player.time.intValue)
             let duration = Int(player.media?.length.intValue ?? 0)
             if duration > 0, position >= duration - 30_000 {

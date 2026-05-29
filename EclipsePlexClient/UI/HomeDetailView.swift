@@ -206,9 +206,15 @@ struct HomeDetailView: View {
                     .buttonStyle(.pressableBordered)
                 }
                 Button {
+                    catalogNavigation.pushRoute(.pseudoTV)
+                } label: {
+                    Label("TV Channels", systemImage: "tv")
+                }
+                .buttonStyle(.pressableBorderedProminent)
+                Button {
                     catalogNavigation.pushRoute(.liveTV)
                 } label: {
-                    Label("Live TV", systemImage: "antenna.radiowaves.left.and.right")
+                    Label("Live TV (tuner)", systemImage: "antenna.radiowaves.left.and.right")
                 }
                 .buttonStyle(.pressableBordered)
                 if plexServer.connectionCandidates.count > 1 {

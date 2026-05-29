@@ -294,6 +294,7 @@ nonisolated enum CatalogNavigationRoute: Hashable, Sendable {
     case libraryCollections(library: PlexLibrary)
     case collectionItems(collectionKey: String, title: String, library: PlexLibrary)
     case liveTV
+    case pseudoTV
 }
 
 nonisolated struct CatalogPageResult: Sendable {

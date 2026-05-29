@@ -31,6 +31,8 @@ struct ResolvedPlayback: Sendable {
     let plexSubtitleStreams: [PlexSubtitleStream]
     let sourceVideoSize: CGSize?
     let playbackMarkers: [PlexPlaybackMarker]
+    /// When true, do not read/write `PlaybackPositionStore` (Pseudo-TV tune-in).
+    let suppressLocalResume: Bool
 
     var url: URL { candidates[0].url }
     var streamKind: PlaybackStreamKind { candidates[0].streamKind }
@@ -49,7 +51,8 @@ struct ResolvedPlayback: Sendable {
         streamOptions: PlaybackStreamOptions = .current,
         plexSubtitleStreams: [PlexSubtitleStream] = [],
         sourceVideoSize: CGSize? = nil,
-        playbackMarkers: [PlexPlaybackMarker] = []
+        playbackMarkers: [PlexPlaybackMarker] = [],
+        suppressLocalResume: Bool = false
     ) {
         precondition(!candidates.isEmpty)
         self.candidates = candidates
@@ -60,6 +63,7 @@ struct ResolvedPlayback: Sendable {
         self.plexSubtitleStreams = plexSubtitleStreams
         self.sourceVideoSize = sourceVideoSize
         self.playbackMarkers = playbackMarkers
+        self.suppressLocalResume = suppressLocalResume
     }
 
     init(
@@ -87,7 +91,8 @@ struct ResolvedPlayback: Sendable {
             streamOptions: streamOptions,
             plexSubtitleStreams: plexSubtitleStreams,
             sourceVideoSize: sourceVideoSize,
-            playbackMarkers: playbackMarkers
+            playbackMarkers: playbackMarkers,
+            suppressLocalResume: suppressLocalResume
         )
     }
 }

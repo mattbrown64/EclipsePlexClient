@@ -22,6 +22,6 @@ Client-side virtual channels from Plex libraries: auto-generated channels (netwo
 
 **Spec:** [PseudoTV.md](PseudoTV.md)
 
-**Branch:** `feat/pseudo-tv`
+**Branch:** `feat/pseudo-tv` (v1 engine + channel list UI in progress)
 
-Track interest in GitHub issues before expanding scope (manual channels, mixed-content polish, in-player channel zap).
+Track interest in GitHub issues before expanding scope (manual channels, mixed-content polish, in-player channel zap, full 24h guide).
